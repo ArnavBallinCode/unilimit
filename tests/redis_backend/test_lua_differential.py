@@ -25,7 +25,12 @@ from unilimit.algorithms import Algorithm, LimitSpec, State
 from unilimit.algorithms._base import MAX_REFILL_US
 from unilimit.backends.base import BatchResult, ConsumeOp, evaluate_batch, peek_batch
 from unilimit.backends.redis import RedisBackend, decode_state, encode_state
-from unilimit.backends.redis._protocol import MODE_CONSUME, MODE_PEEK, ScriptReply, plan_groups
+from unilimit.backends.redis._protocol import (
+    MODE_DIFF_CONSUME,
+    MODE_PEEK,
+    ScriptReply,
+    plan_groups,
+)
 from unilimit.core.rate import MAX_WINDOW_US, MIN_WINDOW_US
 from unilimit.testing import ManualClock
 
@@ -186,7 +191,7 @@ def check_consume(h: Harness, case: Case) -> None:
     before = [h.raw(op.key) for op in ops]
     expected, writes = evaluate_batch(ops, case.states, case.now)
 
-    reply = run_script(h, ops, MODE_CONSUME, case.now)
+    reply = run_script(h, ops, MODE_DIFF_CONSUME, case.now)
 
     assert BatchResult(reply.committed, reply.results) == expected
     assert reply.now_us == case.now
@@ -476,7 +481,9 @@ def test_keys_never_expire_before_the_model_ttl(redis_url: str, spec: LimitSpec,
     op = ConsumeOp("expiry", spec, min(cost, spec.capacity))
     client.delete(op.key)
     client_, script = backend._sync()
-    reply = backend._call(client_, script, [op], plan_groups([op], False)[0], MODE_CONSUME, None)
+    reply = backend._call(
+        client_, script, [op], plan_groups([op], False)[0], MODE_DIFF_CONSUME, None
+    )
     assert reply.committed
     expire_at_ms = client.pexpiretime(op.key)
     assert expire_at_ms * 1000 >= reply.now_us + reply.ttls_us[0]

@@ -267,6 +267,8 @@ local ALGORITHMS = {
 }
 
 local mode = ARGV[1]
+local is_consume = string.sub(mode, 1, 1) == 'c'
+local is_detailed = string.find(mode, 'd') ~= nil
 local now = tonumber(ARGV[2])
 if ARGV[2] == '' then
   local t = redis.call('TIME')
@@ -305,7 +307,7 @@ end
 
 local committed = 0
 local results = {}
-if mode == 'c' then
+if is_consume then
   committed = 1
   for i = 1, #ops do
     results[i] = call(ops[i].impl.evaluate, ops[i])
@@ -333,17 +335,27 @@ else
 end
 
 local reply = { committed, now }
-for i = 1, #ops do
-  local r = results[i]
-  local ttl, written = 0, ''
-  if committed == 1 and r[1] == 1 then
-    ttl, written = r[6], r[5]
+if is_detailed then
+  for i = 1, #ops do
+    local r = results[i]
+    local ttl, written = 0, ''
+    if committed == 1 and r[1] == 1 then
+      ttl, written = r[6], r[5]
+    end
+    reply[#reply + 1] = r[1]
+    reply[#reply + 1] = r[2]
+    reply[#reply + 1] = r[3]
+    reply[#reply + 1] = r[4]
+    reply[#reply + 1] = ttl
+    reply[#reply + 1] = written
   end
-  reply[#reply + 1] = r[1]
-  reply[#reply + 1] = r[2]
-  reply[#reply + 1] = r[3]
-  reply[#reply + 1] = r[4]
-  reply[#reply + 1] = ttl
-  reply[#reply + 1] = written
+else
+  for i = 1, #ops do
+    local r = results[i]
+    reply[#reply + 1] = r[1]
+    reply[#reply + 1] = r[2]
+    reply[#reply + 1] = r[3]
+    reply[#reply + 1] = r[4]
+  end
 end
 return reply
