@@ -69,7 +69,7 @@ jobs:
           if [ ! -x "$dir/src/${{ matrix.server.bin }}" ]; then
             mkdir -p "$dir"
             curl -fsSL "${{ matrix.server.url }}" | tar xz -C "$dir" --strip-components 1
-            make -C "$dir" -j"$(nproc)" BUILD_TLS=no > /dev/null
+            make -C "$dir" -j"$(nproc)" BUILD_TLS=no BUILD_WITH_MODULES=no > /dev/null
           fi
           "$dir/src/${{ matrix.server.bin }}" --version
           echo "UNILIMIT_REDIS_SERVER=$dir/src/${{ matrix.server.bin }}" >> "$GITHUB_ENV"

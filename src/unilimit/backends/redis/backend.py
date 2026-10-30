@@ -409,6 +409,13 @@ class RedisBackend:
                 self._script = None
                 self._owns_client = False
         if owned and client is not None:
+            if self._cluster:
+                # redis-py's RedisCluster.close() closes each node's Redis client, but
+                # those clients wrap explicitly supplied pools, which Redis.close() does
+                # not disconnect. Without this, one socket per used node leaks.
+                for node in client.get_nodes():
+                    if node.redis_connection is not None:
+                        node.redis_connection.connection_pool.disconnect()
             client.close()
 
     # -- async protocol ----------------------------------------------------------------

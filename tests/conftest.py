@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import os
 from collections.abc import Iterator
 
@@ -64,3 +65,23 @@ def redis_cluster() -> Iterator[RedisCluster]:
 def cluster_url(redis_cluster: RedisCluster) -> str:
     redis_cluster.flushall()
     return redis_cluster.url
+
+
+# -- deterministic leak detection ------------------------------------------------------
+
+_LEAK_CHECKED_DIRS = ("redis_backend", "conformance", "concurrency", "fastapi")
+
+
+@pytest.fixture
+def _collect_garbage() -> Iterator[None]:
+    """Run the cyclic GC after the test, so an unclosed socket or connection raises its
+    ResourceWarning (an error under filterwarnings=error) in the test that leaked it,
+    instead of at an unpredictable later point."""
+    yield
+    gc.collect()
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        if any(part in _LEAK_CHECKED_DIRS for part in item.path.parts):
+            item.add_marker(pytest.mark.usefixtures("_collect_garbage"))

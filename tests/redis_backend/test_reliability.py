@@ -15,7 +15,7 @@ import pytest
 import redis
 
 from tests._proxy import FaultProxy
-from tests._servers import RedisProcess, server_binary
+from tests._servers import RedisProcess, close_client, server_binary
 from unilimit import (
     BackendError,
     BackendUnavailable,
@@ -517,6 +517,7 @@ def test_user_supplied_clients_are_not_closed(server: RedisProcess) -> None:
     assert client.ping()  # still usable: the caller owns it
     with pytest.raises(Exception, match="no async client"):
         asyncio.run(backend.aconsume([ConsumeOp("k", SPEC)]))
+    client.close()
 
 
 def test_configuration_errors() -> None:
@@ -565,7 +566,7 @@ def test_supplied_cluster_client_is_detected(redis_cluster: object, cluster_url:
     backend = RedisBackend(client=client)
     assert backend.cluster
     assert backend.consume([ConsumeOp("a", SPEC), ConsumeOp("b", SPEC)]).committed
-    client.close()
+    close_client(client)
 
 
 def test_sync_gate_timeout_is_overload_not_an_outage(server: RedisProcess) -> None:

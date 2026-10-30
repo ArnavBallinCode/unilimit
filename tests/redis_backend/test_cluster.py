@@ -297,8 +297,12 @@ async def test_primary_crash_and_failover(
         await asyncio.sleep(0.1)
 
     assert saw_degraded  # the outage was observed and handled per fail_mode
-    new_owner = disposable_cluster.node_for_slot(key_hash_slot(key))
-    assert new_owner.port != victim.port  # a replica was promoted
+    # Nodes learn the new topology asynchronously: the client may already have been
+    # redirected to the promoted replica before the node we ask has updated its view.
+    deadline = time.monotonic() + 10
+    while disposable_cluster.node_for_slot(key_hash_slot(key)).port == victim.port:
+        assert time.monotonic() < deadline, "no replica was promoted"
+        await asyncio.sleep(0.1)
     assert decision.allowed
     # The promoted replica had the replicated count (1 before + 1 now).
     assert decision.results[0].remaining == 3
@@ -314,3 +318,26 @@ async def test_cold_async_cluster_client_survives_a_concurrent_burst(cluster_url
         results = await asyncio.gather(*(limiter.aconsume(rule, "x") for _ in range(150)))
         assert not any(r.degraded for r in results)
         await limiter.aclose()
+
+
+def test_sync_cluster_close_releases_every_node_connection(cluster_url: str) -> None:
+    """Regression: redis-py's RedisCluster.close() leaves node pools connected (one
+    socket per used node). The backend's close() must actually close them, not leave
+    them to the garbage collector."""
+    backend = RedisBackend(cluster_url, cluster=True)
+    ops = [ConsumeOp(f"leak-{i}", PER_USER.spec) for i in range(30)]  # spans all primaries
+    backend.consume(ops)
+    client, _ = backend._sync()  # keep it reachable, as a long-lived app would
+
+    def open_sockets() -> int:
+        return sum(
+            1
+            for node in client.get_nodes()
+            if node.redis_connection is not None
+            for conn in node.redis_connection.connection_pool._available_connections
+            if conn._sock is not None
+        )
+
+    assert open_sockets() >= 3
+    backend.close()
+    assert open_sockets() == 0

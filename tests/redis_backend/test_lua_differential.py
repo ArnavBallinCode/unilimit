@@ -20,6 +20,7 @@ import redis.cluster
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from tests._servers import close_client
 from unilimit.algorithms import Algorithm, LimitSpec, State
 from unilimit.algorithms._base import MAX_REFILL_US
 from unilimit.backends.base import BatchResult, ConsumeOp, evaluate_batch, peek_batch
@@ -67,7 +68,7 @@ def harness(request: pytest.FixtureRequest) -> Iterator[Harness]:
         backend = RedisBackend(url, cluster=True, clock=clock)
     yield Harness(backend, client, clock, request.param)
     backend.close()
-    client.close()
+    close_client(client)
 
 
 # -- strategies --------------------------------------------------------------------------
@@ -454,7 +455,9 @@ def test_server_time_is_used_by_default(redis_url: str) -> None:
     before = time.time_ns() // 1000
     backend.consume([ConsumeOp("server-time", spec)])
     after = time.time_ns() // 1000
-    raw = redis.Redis.from_url(redis_url).get("server-time")
+    reader = redis.Redis.from_url(redis_url)
+    raw = reader.get("server-time")
+    reader.close()
     assert isinstance(raw, bytes)
     _, (start, count) = decode_state(raw)
     assert count == 1

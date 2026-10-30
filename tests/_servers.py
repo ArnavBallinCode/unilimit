@@ -29,6 +29,20 @@ def server_binary() -> str:
     return path
 
 
+def close_client(client: object) -> None:
+    """Close a redis-py client completely.
+
+    RedisCluster.close() leaves node connection pools connected; disconnect them too.
+    """
+    import redis.cluster
+
+    if isinstance(client, redis.cluster.RedisCluster):
+        for node in client.get_nodes():
+            if node.redis_connection is not None:
+                node.redis_connection.connection_pool.disconnect()
+    client.close()  # type: ignore[attr-defined]
+
+
 def free_port() -> int:
     """A free port whose cluster bus port (+10000) is also free."""
     while True:
