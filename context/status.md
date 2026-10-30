@@ -13,7 +13,9 @@ _Last updated: 2026-10-30, after Milestone 6 (observability, fallback, benchmark
 | — | Prior-art adoptions: `limits` rate grammar, `WebSocketRateLimit`, HTTP-date `Retry-After` | Done |
 | M5 | Django: middleware (sync/async), `@ratelimit`, DRF throttles, `header:` keys, `ipv4_prefix`, docs | **Done**; CI green on `45f4492` |
 | M6 | Observability: events, metrics (Prometheus, OpenTelemetry), throttled failure logs, opt-in local fallback, benchmark tooling and results | **Done**; CI green on `e26a377` (PR #2) |
-| M7 | MkDocs site, packaging, release; performance work suggested by the M6 benchmarks | Planned |
+| M7 | WebSocket maturity: distributed concurrent connection limits, leases, crash recovery, weighted budgets, rejection policies; Starlette integration | **Done** |
+| M8 | Backend & Core maturity: Redis Sentinel, TLS, custom backend contract & test runner | Planned |
+| M9 | Security & reliability audit, release documentation, packaging & distribution pipeline | Planned |
 
 Milestones start only when the maintainer asks.
 

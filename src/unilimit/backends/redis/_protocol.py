@@ -18,6 +18,7 @@ from unilimit.core.errors import BackendError
 from unilimit.core.keys import key_hash_slot
 
 SCRIPT = files(__package__).joinpath("batch.lua").read_text(encoding="utf-8")
+LEASE_SCRIPT = files(__package__).joinpath("lease.lua").read_text(encoding="utf-8")
 
 _FIELDS_COMPACT = 4  # allowed, remaining, reset_after, retry_after
 _FIELDS_DETAILED = 6  # + ttl, written state

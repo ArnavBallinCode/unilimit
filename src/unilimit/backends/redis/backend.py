@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,9 +26,16 @@ from redis.backoff import NoBackoff
 from redis.retry import Retry
 
 from unilimit._logging import throttled
-from unilimit.backends.base import BatchResult, ConsumeOp, OpResult, check_unique_keys
+from unilimit.backends.base import (
+    BatchResult,
+    ConsumeOp,
+    LeaseResult,
+    OpResult,
+    check_unique_keys,
+)
 from unilimit.backends.redis import _errors
 from unilimit.backends.redis._protocol import (
+    LEASE_SCRIPT,
     MODE_CONSUME,
     MODE_PEEK,
     SCRIPT,
@@ -59,6 +66,7 @@ class _Progress:
 class _AsyncEntry:
     client: Any
     script: Any
+    lease_script: Any
     gate: asyncio.Semaphore
     owned: bool
     init_lock: asyncio.Lock
@@ -146,10 +154,16 @@ class RedisBackend:
 
         self._client = client
         self._script: Any = client.register_script(SCRIPT) if client is not None else None
+        self._lease_script: Any = (
+            client.register_script(LEASE_SCRIPT) if client is not None else None
+        )
         self._owns_client = False
         self._fixed_async = async_client
         self._fixed_async_script: Any = (
             async_client.register_script(SCRIPT) if async_client is not None else None
+        )
+        self._fixed_async_lease_script: Any = (
+            async_client.register_script(LEASE_SCRIPT) if async_client is not None else None
         )
         # Per event loop: redis.asyncio connections and asyncio primitives are bound to
         # the loop that created them.
@@ -206,6 +220,7 @@ class RedisBackend:
                     else:
                         client = redis.Redis.from_url(self._url, retry=retry, **self._options)
                     self._script = client.register_script(SCRIPT)
+                    self._lease_script = client.register_script(LEASE_SCRIPT)
                     self._client = client
                     self._owns_client = True
         return self._client, self._script
@@ -221,7 +236,12 @@ class RedisBackend:
         gate = asyncio.Semaphore(self._max_connections)
         if self._fixed_async is not None:
             entry = _AsyncEntry(
-                self._fixed_async, self._fixed_async_script, gate, False, asyncio.Lock()
+                self._fixed_async,
+                self._fixed_async_script,
+                self._fixed_async_lease_script,
+                gate,
+                False,
+                asyncio.Lock(),
             )
         elif self._url is None:
             raise ConfigurationError("no async client: construct RedisBackend with async_client=")
@@ -235,7 +255,14 @@ class RedisBackend:
                 )
             else:
                 client = redis.asyncio.Redis.from_url(self._url, retry=retry, **self._options)
-            entry = _AsyncEntry(client, client.register_script(SCRIPT), gate, True, asyncio.Lock())
+            entry = _AsyncEntry(
+                client,
+                client.register_script(SCRIPT),
+                client.register_script(LEASE_SCRIPT),
+                gate,
+                True,
+                asyncio.Lock(),
+            )
         self._async[loop] = entry
         return entry
 
@@ -467,6 +494,7 @@ class RedisBackend:
             if owned:
                 self._client = None
                 self._script = None
+                self._lease_script = None
                 self._owns_client = False
         if owned and client is not None:
             if self._cluster:
@@ -477,6 +505,62 @@ class RedisBackend:
                     if node.redis_connection is not None:
                         node.redis_connection.connection_pool.disconnect()
             client.close()
+
+    def acquire_lease(
+        self, key: str, lease_id: str, max_concurrent: int, ttl_us: int, now_us: int = 0
+    ) -> LeaseResult:
+        if now_us <= 0 and self._clock is not None:
+            now_us = self._clock.now_us()
+        key_ttl_sec = max(1, (ttl_us * 2 + 999_999) // 1_000_000)
+        with self._errors():
+            client, _ = self._sync()
+            with self._slot():
+                reply = self._lease_script(
+                    keys=[key],
+                    args=[
+                        "a",
+                        lease_id,
+                        str(now_us),
+                        str(ttl_us),
+                        str(max_concurrent),
+                        str(key_ttl_sec),
+                    ],
+                    client=client,
+                )
+            allowed = bool(reply[0])
+            current = int(reply[1])
+            max_c = int(reply[2])
+            retry_after_us = int(reply[3]) if int(reply[3]) > 0 else None
+            return LeaseResult(
+                allowed=allowed,
+                current=current,
+                max_concurrent=max_c,
+                retry_after_us=retry_after_us,
+            )
+
+    def renew_lease(self, key: str, lease_id: str, ttl_us: int, now_us: int = 0) -> bool:
+        if now_us <= 0 and self._clock is not None:
+            now_us = self._clock.now_us()
+        key_ttl_sec = max(1, (ttl_us * 2 + 999_999) // 1_000_000)
+        with self._errors():
+            client, _ = self._sync()
+            with self._slot():
+                reply = self._lease_script(
+                    keys=[key],
+                    args=["r", lease_id, str(now_us), str(ttl_us), "0", str(key_ttl_sec)],
+                    client=client,
+                )
+            return bool(reply[0])
+
+    def release_lease(self, key: str, lease_id: str) -> None:
+        with suppress(Exception), self._errors():
+            client, _ = self._sync()
+            with self._slot():
+                self._lease_script(
+                    keys=[key],
+                    args=["x", lease_id, "0", "0", "0", "0"],
+                    client=client,
+                )
 
     # -- async protocol ----------------------------------------------------------------
 
@@ -570,6 +654,62 @@ class RedisBackend:
             for group in _slot_groups(keys, self._cluster):
                 async with self._aslot(entry.gate):
                     await entry.client.delete(*group)
+
+    async def aacquire_lease(
+        self, key: str, lease_id: str, max_concurrent: int, ttl_us: int, now_us: int = 0
+    ) -> LeaseResult:
+        if now_us <= 0 and self._clock is not None:
+            now_us = self._clock.now_us()
+        key_ttl_sec = max(1, (ttl_us * 2 + 999_999) // 1_000_000)
+        with self._errors():
+            entry = await self._ready_entry()
+            async with self._aslot(entry.gate):
+                reply = await entry.lease_script(
+                    keys=[key],
+                    args=[
+                        "a",
+                        lease_id,
+                        str(now_us),
+                        str(ttl_us),
+                        str(max_concurrent),
+                        str(key_ttl_sec),
+                    ],
+                    client=entry.client,
+                )
+            allowed = bool(reply[0])
+            current = int(reply[1])
+            max_c = int(reply[2])
+            retry_after_us = int(reply[3]) if int(reply[3]) > 0 else None
+            return LeaseResult(
+                allowed=allowed,
+                current=current,
+                max_concurrent=max_c,
+                retry_after_us=retry_after_us,
+            )
+
+    async def arenew_lease(self, key: str, lease_id: str, ttl_us: int, now_us: int = 0) -> bool:
+        if now_us <= 0 and self._clock is not None:
+            now_us = self._clock.now_us()
+        key_ttl_sec = max(1, (ttl_us * 2 + 999_999) // 1_000_000)
+        with self._errors():
+            entry = await self._ready_entry()
+            async with self._aslot(entry.gate):
+                reply = await entry.lease_script(
+                    keys=[key],
+                    args=["r", lease_id, str(now_us), str(ttl_us), "0", str(key_ttl_sec)],
+                    client=entry.client,
+                )
+            return bool(reply[0])
+
+    async def arelease_lease(self, key: str, lease_id: str) -> None:
+        with suppress(Exception), self._errors():
+            entry = await self._ready_entry()
+            async with self._aslot(entry.gate):
+                await entry.lease_script(
+                    keys=[key],
+                    args=["x", lease_id, "0", "0", "0", "0"],
+                    client=entry.client,
+                )
 
     async def aclose(self) -> None:
         """Close the async client created for the running event loop, if any.

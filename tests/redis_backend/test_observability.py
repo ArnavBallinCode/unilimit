@@ -59,9 +59,12 @@ def own_redis() -> Iterator[RedisProcess]:
 
 @pytest.fixture
 def disposable_cluster() -> Iterator[RedisCluster]:
-    cluster = RedisCluster(server_binary()).start()
-    yield cluster
-    cluster.destroy()
+    cluster = RedisCluster(server_binary())
+    try:
+        cluster.start()
+        yield cluster
+    finally:
+        cluster.destroy()
 
 
 def limiter_for(
@@ -215,9 +218,12 @@ def test_cluster_primary_crash_is_observable(disposable_cluster: RedisCluster) -
     ctx = RequestContext(user_id="x")
     try:
         assert limiter.evaluate(ctx, ["per-user"], include_global=False).allowed
-        slot_owner = disposable_cluster.node_for_slot(
-            key_hash_slot(limiter.key_for(PER_USER, Identity("user", "x")))
-        )
+        key = limiter.key_for(PER_USER, Identity("user", "x"))
+        slot_owner = disposable_cluster.node_for_slot(key_hash_slot(key))
+        hash_tag = key[key.index("{") : key.index("}") + 1]
+        with slot_owner.client(socket_timeout=10.0) as primary:
+            primary.set(f"{hash_tag}replicated", 1)
+            assert primary.wait(1, 5000) >= 1, "the write did not replicate"
         slot_owner.stop()
         saw_fallback = False
         deadline = time.monotonic() + 30

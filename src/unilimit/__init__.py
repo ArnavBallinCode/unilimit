@@ -4,6 +4,7 @@ from unilimit._logging import configure_logging
 from unilimit._version import __version__
 from unilimit.algorithms import Algorithm
 from unilimit.backends.memory import MemoryBackend
+from unilimit.core.concurrency import ConcurrencyLimit, LeaseDecision
 from unilimit.core.context import RequestContext
 from unilimit.core.errors import (
     BackendError,
@@ -38,6 +39,7 @@ __all__ = [
     "BackendUnavailable",
     "BackendUnavailableEvent",
     "BreakerEvent",
+    "ConcurrencyLimit",
     "ConfigurationError",
     "Decision",
     "DecisionEvent",
@@ -46,6 +48,7 @@ __all__ = [
     "Identity",
     "IdentityError",
     "InMemoryMetrics",
+    "LeaseDecision",
     "Limiter",
     "MemoryBackend",
     "Observer",

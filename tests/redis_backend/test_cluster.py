@@ -266,9 +266,12 @@ async def test_script_flush_on_every_node(
 
 @pytest.fixture
 def disposable_cluster() -> Iterator[RedisCluster]:
-    cluster = RedisCluster(server_binary()).start()
-    yield cluster
-    cluster.destroy()
+    cluster = RedisCluster(server_binary())
+    try:
+        cluster.start()
+        yield cluster
+    finally:
+        cluster.destroy()
 
 
 @pytest.mark.parametrize("fail_mode", ["open", "closed"])
@@ -276,43 +279,47 @@ async def test_primary_crash_and_failover(
     disposable_cluster: RedisCluster, mode: str, fail_mode: str
 ) -> None:
     limiter = make_limiter(disposable_cluster.url, fail_mode=fail_mode, cooldown=0.2)
-    ident = Identity("user", "failover")
-    key = limiter.key_for(PER_USER, ident)
-    ctx = RequestContext(user_id="failover")
-    assert (await evaluate(limiter, mode, [PER_USER], ctx)).allowed
+    try:
+        ident = Identity("user", "failover")
+        key = limiter.key_for(PER_USER, ident)
+        ctx = RequestContext(user_id="failover")
+        assert (await evaluate(limiter, mode, [PER_USER], ctx)).allowed
 
-    victim = disposable_cluster.node_for_slot(key_hash_slot(key))
-    # Replication is asynchronous, and a fixed sleep lost the race on Valkey 8.0.2 and
-    # Redis 7.2.7 in CI. WAIT only covers writes made on the same connection (on a fresh
-    # one it returns at once), so write a marker into the same slot, then WAIT: the
-    # replication stream is ordered, so the replica has the earlier consume as well.
-    hash_tag = key[key.index("{") : key.index("}") + 1]
-    with victim.client() as primary:
-        primary.set(f"{hash_tag}replicated", 1)
-        assert primary.wait(1, 5000) >= 1, "the write did not replicate"
-    victim.stop()  # crash the primary that owns this identity's slot
+        victim = disposable_cluster.node_for_slot(key_hash_slot(key))
+        # Replication is asynchronous, and a fixed sleep lost the race on Valkey 8.0.2 and
+        # Redis 7.2.7 in CI. WAIT only covers writes made on the same connection (on a fresh
+        # one it returns at once), so write a marker into the same slot, then WAIT: the
+        # replication stream is ordered, so the replica has the earlier consume as well.
+        hash_tag = key[key.index("{") : key.index("}") + 1]
+        with victim.client(socket_timeout=10.0) as primary:
+            primary.set(f"{hash_tag}replicated", 1)
+            assert primary.wait(1, 5000) >= 1, "the write did not replicate"
+        victim.stop()  # crash the primary that owns this identity's slot
 
-    saw_degraded = False
-    deadline = time.monotonic() + 30
-    while True:
-        decision = await evaluate(limiter, mode, [PER_USER], ctx)
-        if not decision.degraded:
-            break
-        saw_degraded = True
-        assert decision.allowed is (fail_mode == "open")
-        assert time.monotonic() < deadline, "failover did not complete"
-        await asyncio.sleep(0.1)
+        saw_degraded = False
+        deadline = time.monotonic() + 30
+        while True:
+            decision = await evaluate(limiter, mode, [PER_USER], ctx)
+            if not decision.degraded:
+                break
+            saw_degraded = True
+            assert decision.allowed is (fail_mode == "open")
+            assert time.monotonic() < deadline, "failover did not complete"
+            await asyncio.sleep(0.1)
 
-    assert saw_degraded  # the outage was observed and handled per fail_mode
-    # Nodes learn the new topology asynchronously: the client may already have been
-    # redirected to the promoted replica before the node we ask has updated its view.
-    deadline = time.monotonic() + 10
-    while disposable_cluster.node_for_slot(key_hash_slot(key)).port == victim.port:
-        assert time.monotonic() < deadline, "no replica was promoted"
-        await asyncio.sleep(0.1)
-    assert decision.allowed
-    # The promoted replica had the replicated count (1 before + 1 now).
-    assert decision.results[0].remaining == 3
+        assert saw_degraded  # the outage was observed and handled per fail_mode
+        # Nodes learn the new topology asynchronously: the client may already have been
+        # redirected to the promoted replica before the node we ask has updated its view.
+        deadline = time.monotonic() + 10
+        while disposable_cluster.node_for_slot(key_hash_slot(key)).port == victim.port:
+            assert time.monotonic() < deadline, "no replica was promoted"
+            await asyncio.sleep(0.1)
+        assert decision.allowed
+        # The promoted replica had the replicated count (1 before + 1 now).
+        assert decision.results[0].remaining == 3
+    finally:
+        limiter.close()
+        await limiter.aclose()
 
 
 async def test_cold_async_cluster_client_survives_a_concurrent_burst(cluster_url: str) -> None:

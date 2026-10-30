@@ -58,6 +58,11 @@ class Decision:
     Redis counters."""
 
     @property
+    def remaining(self) -> int | None:
+        """The remaining quota on the binding rule, or None if exempt or degraded."""
+        return self.binding.remaining if self.binding is not None else None
+
+    @property
     def retry_after(self) -> float | None:
         if self.allowed or self.binding is None:
             return None

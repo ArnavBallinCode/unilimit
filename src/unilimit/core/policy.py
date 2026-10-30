@@ -110,7 +110,15 @@ def _applies(rule: Rule, ctx: RequestContext) -> bool:
     return rule.when is None or bool(rule.when(ctx))
 
 
-def resolve_cost(rule: Rule, ctx: RequestContext) -> int:
+def resolve_cost(rule: Rule, ctx: RequestContext, override_cost: int | None = None) -> int:
+    if override_cost is not None:
+        if (
+            isinstance(override_cost, bool)
+            or not isinstance(override_cost, int)
+            or override_cost < 1
+        ):
+            raise ValueError(f"cost must be a positive integer, got {override_cost!r}")
+        return override_cost
     if isinstance(rule.cost, int):
         return rule.cost
     cost = rule.cost(ctx)
@@ -124,6 +132,7 @@ def plan(
     rules: Sequence[Rule],
     config: PolicyConfig,
     skip_keys: Collection[str] = (),
+    cost: int | None = None,
 ) -> Plan | Decision:
     """Pipeline steps 1-5 of ARCHITECTURE.md §6.1. Deterministic and side-effect free
     apart from logging and calling user-supplied predicates.
@@ -167,7 +176,7 @@ def plan(
         key = rate_limit_key(config.namespace, rule.name, rule.algorithm, digest)
         if key in skip_keys:
             continue
-        op = ConsumeOp(key, rule.spec, resolve_cost(rule, ctx), rule.enforced)
+        op = ConsumeOp(key, rule.spec, resolve_cost(rule, ctx, cost), rule.enforced)
         existing = entries.get(key)
         if existing is not None:
             if existing.op == op:

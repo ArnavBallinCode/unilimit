@@ -97,9 +97,12 @@ class RedisProcess:
         self.proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.monotonic() + 10
         while True:
+            if self.proc.poll() is not None:
+                raise RuntimeError(f"Server exited with code {self.proc.returncode}")
             try:
-                if self.client(socket_timeout=0.5).ping():
-                    return self
+                with self.client(socket_timeout=0.5) as client:
+                    if client.ping():
+                        return self
             except (redis.exceptions.AuthenticationError, redis.exceptions.ResponseError):
                 return self  # answering with an auth error means the server is up
             except redis.exceptions.ConnectionError:
@@ -141,32 +144,36 @@ class RedisCluster:
         return self.nodes[0].url
 
     def start(self) -> RedisCluster:
-        for node in self.nodes:
-            node.start()
-        cli = Path(self.nodes[0].binary).with_name(
-            Path(self.nodes[0].binary).name.replace("server", "cli")
-        )
-        if not cli.exists():
-            found = shutil.which(cli.name)
-            if found is None:
-                pytest.skip(f"{cli.name} not found; needed to create a test cluster")
-            cli = Path(found)
-        subprocess.run(
-            [
-                str(cli),
-                "--cluster",
-                "create",
-                *(f"127.0.0.1:{n.port}" for n in self.nodes),
-                "--cluster-replicas",
-                str(self.replicas),
-                "--cluster-yes",
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self.wait_ok()
-        return self
+        try:
+            for node in self.nodes:
+                node.start()
+            cli = Path(self.nodes[0].binary).with_name(
+                Path(self.nodes[0].binary).name.replace("server", "cli")
+            )
+            if not cli.exists():
+                found = shutil.which(cli.name)
+                if found is None:
+                    pytest.skip(f"{cli.name} not found; needed to create a test cluster")
+                cli = Path(found)
+            subprocess.run(
+                [
+                    str(cli),
+                    "--cluster",
+                    "create",
+                    *(f"127.0.0.1:{n.port}" for n in self.nodes),
+                    "--cluster-replicas",
+                    str(self.replicas),
+                    "--cluster-yes",
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.wait_ok()
+            return self
+        except BaseException:
+            self.destroy()
+            raise
 
     def wait_ok(self, timeout: float = 30) -> None:
         """Wait until every live node reports the cluster OK and every replica has

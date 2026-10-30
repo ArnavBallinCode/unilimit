@@ -86,13 +86,14 @@ class WebSocketSession:
     def __init__(self, app: Any, path: str, peer: tuple[str, int] = ("203.0.113.10", 5000)):
         self.to_app: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.from_app: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        clean_path, _, qs = path.partition("?")
         scope = {
             "type": "websocket",
             "asgi": {"version": "3.0"},
             "scheme": "ws",
-            "path": path,
-            "raw_path": path.encode(),
-            "query_string": b"",
+            "path": clean_path,
+            "raw_path": clean_path.encode(),
+            "query_string": qs.encode(),
             "headers": [(b"host", b"testserver")],
             "client": peer,
             "server": ("testserver", 80),
