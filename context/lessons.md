@@ -77,6 +77,10 @@ surprises you.
 
 - **Resource leaks surface at random GC times** (CI failed at session teardown while
   local runs passed). → GC after every Redis or FastAPI test, so the leaking test fails.
+- **Filling Redis "up to" `maxmemory` is racy**: client buffers count toward
+  `used_memory` and shrink when a connection goes quiet, so a later write can fit
+  again (flaked on Redis 6.2 in CI). → Write data, then set `maxmemory` well *below*
+  the measured usage, and assert that a probe write fails.
 - **A crashed worker before a `multiprocessing.Barrier` hangs the suite**, and
   non-daemon children block exit. → Barrier timeouts, daemon processes, errors reported
   through the queue, `terminate()` in `finally`.

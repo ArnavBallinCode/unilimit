@@ -6,7 +6,6 @@ connection lifecycle. Each test owns its server, so faults never leak between te
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -355,14 +354,17 @@ async def test_authentication_failure_is_an_error_not_an_outage(mode: str) -> No
 
 
 async def test_out_of_memory_is_treated_as_unavailable(mode: str) -> None:
-    small = RedisProcess(
-        server_binary(), extra=("--maxmemory", "2mb", "--maxmemory-policy", "noeviction")
-    ).start()
+    small = RedisProcess(server_binary(), extra=("--maxmemory-policy", "noeviction")).start()
     try:
         client = small.client()
-        with contextlib.suppress(redis.exceptions.OutOfMemoryError):
-            for i in range(10_000):
-                client.set(f"filler:{i}", "x" * 1_000)
+        for i in range(2_000):
+            client.set(f"filler:{i}", "x" * 1_000)
+        # Put the limit well below current usage, so every write is refused no matter how
+        # client buffers fluctuate (filling *up to* a limit raced on Redis 6.2).
+        used = int(client.info("memory")["used_memory"])
+        client.config_set("maxmemory", str(used - 1_000_000))
+        with pytest.raises(redis.exceptions.OutOfMemoryError):
+            client.set("probe", "x")
         limiter = Limiter(Backend(small.url, cooldown=0))
         result = await consume(limiter, mode)
         assert (result.allowed, result.degraded) == (True, True)
