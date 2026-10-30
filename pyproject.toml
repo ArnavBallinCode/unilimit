@@ -13,7 +13,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Arnav Angarkar" }]
 keywords = ["rate limit", "ratelimit", "throttle", "redis", "django", "fastapi", "asyncio"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -33,11 +33,15 @@ classifiers = [
     "Typing :: Typed",
 ]
 # The core has no runtime dependencies. Integrations and Redis are extras: redis,
-# fastapi, django, drf, all.
+# fastapi, django, drf, starlette, prometheus, otel, all.
 dependencies = []
 
 [project.urls]
-Source = "https://github.com/ArnavBallinCode/unilimit"
+Homepage = "https://github.com/ArnavBallinCode/unilimit"
+Documentation = "https://github.com/ArnavBallinCode/unilimit#readme"
+Repository = "https://github.com/ArnavBallinCode/unilimit"
+Issues = "https://github.com/ArnavBallinCode/unilimit/issues"
+Changelog = "https://github.com/ArnavBallinCode/unilimit/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 redis = [
@@ -45,6 +49,9 @@ redis = [
 ]
 fastapi = [
     "fastapi>=0.115",
+]
+starlette = [
+    "starlette>=0.38",
 ]
 django = [
     "django>=5.2",
@@ -60,7 +67,7 @@ otel = [
     "opentelemetry-api>=1.25",
 ]
 all = [
-    "unilimit[redis,fastapi,django,drf,prometheus,otel]",
+    "unilimit[redis,fastapi,starlette,django,drf,prometheus,otel]",
 ]
 
 [dependency-groups]

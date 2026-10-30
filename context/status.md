@@ -16,7 +16,7 @@ _Last updated: 2026-10-30, after Milestone 6 (observability, fallback, benchmark
 | M7 | WebSocket maturity: distributed concurrent connection limits, leases, crash recovery, weighted budgets, rejection policies; Starlette integration | **Done** |
 | M8 | Backend & Core maturity: Redis Sentinel, TLS, custom backend contract & test runner | **Done** |
 | M9 | Security & reliability audit, release documentation | **Done** |
-| M10 | Packaging, distribution pipeline, TestPyPI and PyPI release | Next |
+| M10 | Packaging, distribution pipeline, TestPyPI and PyPI release | **Done** (0.1.0 release ready) |
 
 Milestones start only when the maintainer asks.
 

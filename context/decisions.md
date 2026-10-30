@@ -137,5 +137,14 @@ decision needs the maintainer's agreement and a new entry here.
 | Dedicated security audit suite (`tests/unit/test_security_audit.py`) | Tests IP spoofing resistance, proxy traversal halts, parameter injections, length caps, and event redactions |
 | Production security guide (`docs/security.md`) and audit report (`context/security-audit.md`) | Documents defense-in-depth, fail-open vs fail-closed strategies, secret salts, and residual risks for operators |
 
+## M10
+
+| Decision | Rationale |
+|---|---|
+| Version set to `0.1.0` in `src/unilimit/_version.py` and `pyproject.toml` | Production-quality initial release representing all completed milestones (M1–M9) |
+| Hatchling build targets for clean sdist and wheel inclusion | Guarantees `py.typed`, Lua script engines (`batch.lua`, `lease.lua`), and metadata are properly packaged |
+| GitHub Actions trusted publishing (`.github/workflows/publish.yml`) | Uses OpenID Connect (OIDC) token exchange for secure publishing to TestPyPI and PyPI without long-lived secrets |
+
+
 
 
