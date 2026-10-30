@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+import threading
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import replace
+from time import perf_counter
 from types import MappingProxyType
-from typing import Any, get_args
+from typing import Any, Literal, get_args
 from urllib.parse import urlsplit
 
-from unilimit._logging import logger
+from unilimit._logging import throttled
 from unilimit.backends.base import Backend, BatchResult, ConsumeOp, OpResult
 from unilimit.backends.memory import MemoryBackend
 from unilimit.core.context import RequestContext
@@ -30,6 +34,17 @@ from unilimit.core.policy import (
 )
 from unilimit.core.result import Decision, RateLimitResult
 from unilimit.core.rule import FailMode, OnMissing, Rule
+from unilimit.observability import (
+    BackendUnavailableEvent,
+    DecisionEvent,
+    Emitter,
+    Event,
+    FallbackEvent,
+    Observer,
+    RuleOutcome,
+    normalise_observers,
+    now,
+)
 
 _REDIS_OPTIONS = (
     "cluster",
@@ -70,6 +85,8 @@ class Limiter:
         deny: AccessList | None = None,
         exempt_paths: Iterable[str] = (),
         exempt: Callable[[RequestContext], bool] | None = None,
+        observer: Observer | Sequence[Observer] | None = None,
+        fallback: Literal["memory"] | MemoryBackend | None = None,
     ) -> None:
         if not isinstance(backend, Backend):
             raise ConfigurationError(
@@ -95,6 +112,15 @@ class Limiter:
         self._global_rules: tuple[Rule, ...] = tuple(self._lookup(r) for r in global_rules)
 
         self.backend = backend
+        self._backend_name = str(getattr(backend, "name", type(backend).__name__.lower()))
+        self._emitter = Emitter(normalise_observers(observer))
+        attach = getattr(backend, "attach_emitter", None)
+        if attach is not None:
+            attach(self._emitter)
+        self._fallback = self._make_fallback(fallback, backend)
+        self._fb_lock = threading.Lock()
+        self._fb_active = False
+        self._fb_count = 0
         self._config = PolicyConfig(
             namespace=validate_namespace(namespace),
             identity=IdentityConfig(
@@ -112,6 +138,20 @@ class Limiter:
             exempt_paths=tuple(exempt_paths),
             exempt=exempt,
         )
+
+    @staticmethod
+    def _make_fallback(
+        fallback: Literal["memory"] | MemoryBackend | None, backend: Backend
+    ) -> MemoryBackend | None:
+        if fallback is None:
+            return None
+        if isinstance(backend, MemoryBackend):
+            raise ConfigurationError("fallback only applies to networked backends, not memory")
+        if fallback == "memory":
+            return MemoryBackend()
+        if isinstance(fallback, MemoryBackend):
+            return fallback
+        raise ConfigurationError("fallback must be None, 'memory' or a MemoryBackend")
 
     @classmethod
     def from_url(cls, url: str, **kwargs: Any) -> Limiter:
@@ -205,28 +245,200 @@ class Limiter:
         r = self._lookup(rule)
         return r, ConsumeOp(self.key_for(r, identity), r.spec, cost, enforce=True)
 
-    def _unavailable_result(
+    # -- observability, failure handling and fallback ----------------------------------
+
+    @property
+    def fallback_active(self) -> bool:
+        """True while the process-local fallback is serving decisions."""
+        return self._fb_active
+
+    def add_observer(self, observer: Observer) -> None:
+        """Start delivering events to ``observer`` (see :mod:`unilimit.observability`)."""
+        self._emitter.add(observer)
+
+    def remove_observer(self, observer: Observer) -> None:
+        self._emitter.remove(observer)
+
+    def _clock(self) -> float | None:
+        return perf_counter() if self._emitter.enabled else None
+
+    def _decision_event(
+        self, decision: Decision, source: str, duration: float | None
+    ) -> DecisionEvent:
+        binding = decision.binding.rule if decision.binding is not None else decision.rule
+        return DecisionEvent(
+            timestamp=now(),
+            allowed=decision.allowed,
+            reason=decision.reason.value,
+            source=source,  # type: ignore[arg-type]
+            backend=self._backend_name,
+            rules=tuple(
+                RuleOutcome(r.rule.name, r.rule.algorithm.value, r.allowed, r.enforced)
+                for r in decision.results
+            ),
+            binding_rule=None if binding is None else binding.name,
+            fail_mode=(
+                ("open" if decision.allowed else "closed") if source == "degraded" else None
+            ),
+            partial_commit=decision.partial_commit,
+            duration=duration,
+        )
+
+    def _emit_decision(self, decision: Decision, source: str, started: float | None) -> None:
+        if self._emitter.enabled:
+            duration = None if started is None else perf_counter() - started
+            self._emitter.emit(lambda: self._decision_event(decision, source, duration))
+
+    def _emit_result(self, result: RateLimitResult, source: str, started: float | None) -> None:
+        if not self._emitter.enabled:
+            return
+        duration = None if started is None else perf_counter() - started
+
+        def make() -> Event:
+            return DecisionEvent(
+                timestamp=now(),
+                allowed=result.allowed,
+                reason="allowed" if result.allowed else "rate_limited",
+                source=source,  # type: ignore[arg-type]
+                backend=self._backend_name,
+                rules=(
+                    RuleOutcome(
+                        result.rule.name,
+                        result.rule.algorithm.value,
+                        result.allowed,
+                        result.enforced,
+                    ),
+                ),
+                binding_rule=result.rule.name,
+                fail_mode=(
+                    ("open" if result.allowed else "closed") if source == "degraded" else None
+                ),
+                partial_commit=False,
+                duration=duration,
+            )
+
+        self._emitter.emit(make)
+
+    def _on_unavailable(
+        self, exc: BackendUnavailable, started: float | None, operation: str
+    ) -> None:
+        if self._emitter.enabled:
+            duration = 0.0 if started is None else perf_counter() - started
+            cause = exc.__cause__ or exc
+            self._emitter.emit(
+                lambda: BackendUnavailableEvent(
+                    timestamp=now(),
+                    backend=self._backend_name,
+                    operation=operation,  # type: ignore[arg-type]
+                    error=type(cause).__name__,
+                    partial_commit=exc.partial_commit,
+                    duration=duration,
+                )
+            )
+
+    def _log_unavailable(self, outcome: str, exc: BackendUnavailable) -> None:
+        # One category per outcome: a fail-closed outage is more serious than fail-open.
+        throttled.log(
+            logging.WARNING,
+            f"backend_unavailable:{outcome}",
+            "rate limit backend unavailable; %s: %s",
+            {"open": "failing open", "closed": "failing closed", "fallback": "using fallback"}[
+                outcome
+            ],
+            exc,
+        )
+
+    def _on_success(self, started: float | None) -> None:
+        """A backend call succeeded: the backend is serving again."""
+        if self._fb_active:
+            self._deactivate_fallback()
+
+    def _can_fallback(self, rules: Iterable[Rule]) -> bool:
+        """The fallback may only tighten fail-open. A fail-closed rule stays closed: the
+        fallback would admit traffic that fail-closed rejects."""
+        return self._fallback is not None and not any(
+            r.enforced and is_fail_closed(r, self._config.fail_mode) for r in rules
+        )
+
+    def _fallback_served(self) -> None:
+        with self._fb_lock:
+            self._fb_count += 1
+            first = not self._fb_active
+            self._fb_active = True
+        if first:
+            throttled.log(
+                logging.WARNING,
+                "fallback_activated",
+                "rate limit backend unavailable: enforcing limits with the process-local "
+                "fallback (counters are per process, not shared)",
+            )
+            self._emitter.emit(lambda: FallbackEvent(now(), self._backend_name, "activated", 0))
+
+    def _deactivate_fallback(self) -> None:
+        with self._fb_lock:
+            if not self._fb_active:
+                return
+            served, self._fb_active, self._fb_count = self._fb_count, False, 0
+        throttled.log(
+            logging.WARNING,
+            "fallback_deactivated",
+            "rate limit backend is available again; the process-local fallback served %d "
+            "decisions and is no longer used",
+            served,
+        )
+        self._emitter.emit(lambda: FallbackEvent(now(), self._backend_name, "deactivated", served))
+        throttled.flush()
+
+    def _peek_degraded(
         self, rule: Rule, identity: str | Identity, exc: BackendUnavailable
     ) -> RateLimitResult:
+        """``peek`` is advisory: it follows the fail mode and never uses the fallback."""
         closed = is_fail_closed(rule, self._config.fail_mode)
-        logger.warning(
-            "rate limit backend unavailable; failing %s for rule %r: %s",
-            "closed" if closed else "open",
-            rule.name,
-            exc,
-            extra={"unilimit_rule": rule.name},
-        )
+        self._log_unavailable("closed" if closed else "open", exc)
         return degraded_result(rule, not closed, self.key_for(rule, identity))
 
-    def _unavailable_decision(self, planned: Plan, exc: BackendUnavailable) -> Decision:
+    def _failed_result(
+        self,
+        rule: Rule,
+        identity: str | Identity,
+        exc: BackendUnavailable,
+        started: float | None,
+    ) -> RateLimitResult:
+        closed = is_fail_closed(rule, self._config.fail_mode)
+        self._log_unavailable("closed" if closed else "open", exc)
+        result = degraded_result(rule, not closed, self.key_for(rule, identity))
+        self._emit_result(result, "degraded", started)
+        return result
+
+    def _fallback_result(self, rule: Rule, op: ConsumeOp, batch: BatchResult) -> RateLimitResult:
+        self._fallback_served()
+        return replace(to_result(rule, batch.results[0], op.key), fallback=True)
+
+    def _failed_decision(
+        self, planned: Plan, exc: BackendUnavailable, started: float | None
+    ) -> Decision:
         decision = decide_unavailable(
             planned, self._config.fail_mode, partial_commit=exc.partial_commit
         )
-        logger.warning(
-            "rate limit backend unavailable; failing %s: %s",
-            "open" if decision.allowed else "closed",
-            exc,
+        self._log_unavailable("open" if decision.allowed else "closed", exc)
+        self._emit_decision(decision, "degraded", started)
+        return decision
+
+    def _fallback_decision(
+        self, planned: Plan, batch: BatchResult, exc: BackendUnavailable, started: float | None
+    ) -> Decision:
+        self._log_unavailable("fallback", exc)
+        self._fallback_served()
+        base = decide(planned, batch)
+        binding = base.binding
+        decision = replace(
+            base,
+            results=tuple(replace(r, fallback=True) for r in base.results),
+            binding=None if binding is None else replace(binding, fallback=True),
+            fallback=True,
+            partial_commit=exc.partial_commit,
         )
+        self._emit_decision(decision, "fallback", started)
         return decision
 
     def _rules_for(self, rules: Iterable[Rule | str], include_global: bool) -> list[Rule]:
@@ -245,39 +457,63 @@ class Limiter:
         ``action`` is ignored here: the caller decides what to do with the result.
         """
         r, op = self._single_op(rule, identity, cost)
+        started = self._clock()
         try:
             batch = self.backend.consume([op])
         except BackendUnavailable as exc:
-            return self._unavailable_result(r, identity, exc)
-        return to_result(r, batch.results[0], op.key)
+            self._on_unavailable(exc, started, "consume")
+            if self._fallback is not None and self._can_fallback((r,)):
+                self._log_unavailable("fallback", exc)
+                result = self._fallback_result(r, op, self._fallback.consume([op]))
+                self._emit_result(result, "fallback", started)
+                return result
+            return self._failed_result(r, identity, exc, started)
+        self._on_success(started)
+        result = to_result(r, batch.results[0], op.key)
+        self._emit_result(result, "backend", started)
+        return result
 
     async def aconsume(
         self, rule: Rule | str, identity: str | Identity, *, cost: int = 1
     ) -> RateLimitResult:
         r, op = self._single_op(rule, identity, cost)
+        started = self._clock()
         try:
             batch = await self.backend.aconsume([op])
         except BackendUnavailable as exc:
-            return self._unavailable_result(r, identity, exc)
-        return to_result(r, batch.results[0], op.key)
+            self._on_unavailable(exc, started, "consume")
+            if self._fallback is not None and self._can_fallback((r,)):
+                self._log_unavailable("fallback", exc)
+                result = self._fallback_result(r, op, await self._fallback.aconsume([op]))
+                self._emit_result(result, "fallback", started)
+                return result
+            return self._failed_result(r, identity, exc, started)
+        self._on_success(started)
+        result = to_result(r, batch.results[0], op.key)
+        self._emit_result(result, "backend", started)
+        return result
 
     def peek(self, rule: Rule | str, identity: str | Identity, *, cost: int = 1) -> RateLimitResult:
         """Evaluate without consuming. Never mutates state; never use as an admission check."""
         r, op = self._single_op(rule, identity, cost)
+        started = self._clock()
         try:
             results: tuple[OpResult, ...] = self.backend.peek([op])
         except BackendUnavailable as exc:
-            return self._unavailable_result(r, identity, exc)
+            self._on_unavailable(exc, started, "peek")
+            return self._peek_degraded(r, identity, exc)
         return to_result(r, results[0], op.key)
 
     async def apeek(
         self, rule: Rule | str, identity: str | Identity, *, cost: int = 1
     ) -> RateLimitResult:
         r, op = self._single_op(rule, identity, cost)
+        started = self._clock()
         try:
             results = await self.backend.apeek([op])
         except BackendUnavailable as exc:
-            return self._unavailable_result(r, identity, exc)
+            self._on_unavailable(exc, started, "peek")
+            return self._peek_degraded(r, identity, exc)
         return to_result(r, results[0], op.key)
 
     def reset(self, rule: Rule | str, identity: str | Identity) -> None:
@@ -304,14 +540,26 @@ class Limiter:
         """
         planned = plan(ctx, self._rules_for(rules, include_global), self._config, skip_keys)
         if isinstance(planned, Decision):
+            self._emit_decision(planned, "policy", None)
             return planned
         if not planned.entries:
-            return decide(planned, BatchResult(True, ()))
+            decision = decide(planned, BatchResult(True, ()))
+            self._emit_decision(decision, "policy", None)
+            return decision
+        started = self._clock()
         try:
             batch = self.backend.consume(planned.ops)
         except BackendUnavailable as exc:
-            return self._unavailable_decision(planned, exc)
-        return decide(planned, batch)
+            self._on_unavailable(exc, started, "consume")
+            if self._fallback is not None and self._can_fallback(e.rule for e in planned.entries):
+                return self._fallback_decision(
+                    planned, self._fallback.consume(planned.ops), exc, started
+                )
+            return self._failed_decision(planned, exc, started)
+        self._on_success(started)
+        decision = decide(planned, batch)
+        self._emit_decision(decision, "backend", started)
+        return decision
 
     async def aevaluate(
         self,
@@ -323,19 +571,32 @@ class Limiter:
     ) -> Decision:
         planned = plan(ctx, self._rules_for(rules, include_global), self._config, skip_keys)
         if isinstance(planned, Decision):
+            self._emit_decision(planned, "policy", None)
             return planned
         if not planned.entries:
-            return decide(planned, BatchResult(True, ()))
+            decision = decide(planned, BatchResult(True, ()))
+            self._emit_decision(decision, "policy", None)
+            return decision
+        started = self._clock()
         try:
             batch = await self.backend.aconsume(planned.ops)
         except BackendUnavailable as exc:
-            return self._unavailable_decision(planned, exc)
-        return decide(planned, batch)
+            self._on_unavailable(exc, started, "consume")
+            if self._fallback is not None and self._can_fallback(e.rule for e in planned.entries):
+                return self._fallback_decision(
+                    planned, await self._fallback.aconsume(planned.ops), exc, started
+                )
+            return self._failed_decision(planned, exc, started)
+        self._on_success(started)
+        decision = decide(planned, batch)
+        self._emit_decision(decision, "backend", started)
+        return decision
 
     # -- lifecycle ---------------------------------------------------------------------
 
     def close(self) -> None:
         self.backend.close()
+        throttled.flush()
 
     async def aclose(self) -> None:
         await self.backend.aclose()

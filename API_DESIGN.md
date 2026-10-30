@@ -20,6 +20,8 @@ pip install "unilimit[redis]"     # + redis>=5.0
 pip install "unilimit[django]"    # + Django>=5.2
 pip install "unilimit[drf]"       # + Django>=5.2, djangorestframework>=3.16
 pip install "unilimit[fastapi]"   # + fastapi, starlette
+pip install "unilimit[prometheus]" # + prometheus-client
+pip install "unilimit[otel]"      # + opentelemetry-api
 pip install "unilimit[all]"
 ```
 
@@ -490,29 +492,38 @@ Django's ASGI handler has no lifespan support, so `unilimit.integrations.django.
 
 ---
 
-## 7. Observability
+## 7. Observability — implemented in M6
+
+User guides, all executed by tests: [docs/observability](docs/observability/events.md). This replaces the M1 `Hook` sketch.
 
 ```python
-from unilimit import Hook
+from unilimit import Event, InMemoryMetrics, Limiter
 
 
-class Metrics(Hook):  # all methods optional, sync only, must be fast
-    def on_decision(
-        self, decision, ctx
-    ): ...  # every evaluated request (not exempt ones unless opted in)
-    def on_backend_error(self, error, rules): ...
+def observe(event: Event) -> None:  # synchronous, inline, must be fast
+    print(event.to_dict())
 
 
-limiter = Limiter.from_url(url, hooks=[Metrics()])
+limiter = Limiter.from_url(
+    "redis://localhost:6379/0",
+    observer=[observe, InMemoryMetrics()],  # a callable or a list
+    fallback=None,  # "memory" or a MemoryBackend: opt-in local fallback
+)
+limiter.add_observer(...)  # remove_observer(...)
+limiter.fallback_active  # bool
 ```
 
-- Logging goes to the `unilimit` logger, which has a `NullHandler` attached by default.
-- Rejections log at DEBUG.
-- Fail-open events log at WARNING, at most one per cooldown period.
-- Unexpected errors log at ERROR.
-- Log records carry `extra={"unilimit_rule": ..., "unilimit_reason": ...}` and **never** include raw identities.
+**Events** (`unilimit.observability`, schema version 1): `DecisionEvent` (`decision`), `BackendUnavailableEvent` (`backend_unavailable`), `BreakerEvent` (`breaker`: `open`, `half_open`, `closed`) and `FallbackEvent` (`fallback`: `activated`, `deactivated`). Each has `to_dict()`. Fields are documented in [events.md](docs/observability/events.md) and pinned by `test_event_schema_is_stable`.
 
-OpenTelemetry and Prometheus adapters are planned for v0.2 on top of `Hook`.
+**Guarantees.** Observers run after the decision, inline, and cannot change it: an `Exception` from an observer or from building an event is caught and logged. No event is built without an observer. Events never contain identities, IPs, storage keys, paths or error messages.
+
+**Metrics.** `InMemoryMetrics` (core, `snapshot()`), `unilimit.integrations.prometheus.PrometheusObserver` (`unilimit[prometheus]`) and `unilimit.integrations.otel.OpenTelemetryObserver` (`unilimit[otel]`, API only; metrics plus events on the current span for rejections, degraded decisions and backend errors, no span per decision). Names, labels and semantics: [metrics.md](docs/observability/metrics.md).
+
+**Logging.** The `unilimit` logger has a `NullHandler`. Failure messages are throttled per category, process-locally: first occurrence immediately, repeats suppressed for `unilimit.configure_logging(interval=30.0)` seconds, then a summary with the suppressed count; flushed on recovery and `close()`. See [logging.md](docs/observability/logging.md).
+
+**Fallback.** `Limiter(fallback="memory")` enforces limits with per-process in-memory counters while the backend is unavailable, only for batches whose enforcing rules are all fail-open. `Decision.fallback` / `RateLimitResult.fallback` mark such results. See [fallback.md](docs/observability/fallback.md).
+
+**Backends** may expose `name` and `attach_emitter(emitter)` (both optional, duck-typed): `MemoryBackend.name == "memory"`, `RedisBackend.name` is `redis` or `redis-cluster` and it emits breaker events.
 
 ---
 

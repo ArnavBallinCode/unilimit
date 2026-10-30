@@ -8,6 +8,7 @@ split by hash slot; see :meth:`RedisBackend.consume` for the multi-slot protocol
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
@@ -24,7 +25,7 @@ from redis import exceptions as rex
 from redis.backoff import NoBackoff
 from redis.retry import Retry
 
-from unilimit._logging import logger
+from unilimit._logging import throttled
 from unilimit.backends.base import BatchResult, ConsumeOp, OpResult, check_unique_keys
 from unilimit.backends.redis import _errors
 from unilimit.backends.redis._protocol import (
@@ -44,6 +45,7 @@ from unilimit.backends.redis._protocol import (
 from unilimit.core.clock import Clock
 from unilimit.core.errors import BackendError, BackendUnavailable, ConfigurationError
 from unilimit.core.keys import key_hash_slot
+from unilimit.observability import BreakerEvent, Emitter, now
 
 
 @dataclass
@@ -157,6 +159,7 @@ class RedisBackend:
         self._down_reason = ""
         self._probing = False
         self._breaker_lock = threading.Lock()
+        self._emitters: tuple[Emitter, ...] = ()
 
     @classmethod
     def from_url(cls, url: str, **kwargs: Any) -> RedisBackend:
@@ -165,6 +168,27 @@ class RedisBackend:
     @property
     def cluster(self) -> bool:
         return self._cluster
+
+    @property
+    def name(self) -> str:
+        return "redis-cluster" if self._cluster else "redis"
+
+    def attach_emitter(self, emitter: Emitter) -> None:
+        """Called by :class:`~unilimit.Limiter`: circuit breaker transitions are emitted
+        to its observers."""
+        self._emitters = (*self._emitters, emitter)
+
+    def _emit_breaker(self, state: str, error: str | None) -> None:
+        for emitter in self._emitters:
+            emitter.emit(
+                lambda: BreakerEvent(
+                    timestamp=now(),
+                    backend=self.name,
+                    state=state,  # type: ignore[arg-type]
+                    error=error,
+                    cooldown=self._cooldown,
+                )
+            )
 
     # -- clients -----------------------------------------------------------------------
 
@@ -272,24 +296,32 @@ class RedisBackend:
             if time.monotonic() < self._down_until or self._probing:
                 raise BackendUnavailable(f"Redis unavailable (cooling down): {self._down_reason}")
             self._probing = True
-            return True
+        self._emit_breaker("half_open", None)  # outside the lock: observers are user code
+        return True
 
-    def _trip(self, error: BaseException) -> None:
+    def _trip(self, error: BaseException, cause: BaseException | None = None) -> None:
         with self._breaker_lock:
-            if not self._down_until:
-                logger.warning(
-                    "Redis unavailable (%s); failing fast for %.2fs before probing",
-                    error,
-                    self._cooldown,
-                )
+            first = not self._down_until
             self._down_reason = str(error)
             self._down_until = time.monotonic() + self._cooldown
+        if first:
+            throttled.log(
+                logging.WARNING,
+                "redis_unavailable",
+                "Redis unavailable (%s); failing fast for %.2fs before probing",
+                error,
+                self._cooldown,
+            )
+        self._emit_breaker("open", type(cause or error).__name__)
 
     def _close_breaker(self) -> None:
         with self._breaker_lock:
-            if self._down_until:
-                logger.info("Redis is reachable again")
+            was_open = bool(self._down_until)
             self._down_until = 0.0
+        if was_open:
+            throttled.log(logging.INFO, "redis_recovered", "Redis is reachable again")
+            throttled.flush()
+            self._emit_breaker("closed", None)
 
     @contextmanager
     def _errors(self) -> Iterator[_Progress]:
@@ -307,7 +339,7 @@ class RedisBackend:
         except _errors.HANDLED as exc:
             error = _errors.translate(exc, partial_commit=progress.committed_any)
             if self._cooldown and _errors.is_outage(exc):
-                self._trip(error)
+                self._trip(error, exc)
             elif probe or self._down_until:
                 self._close_breaker()  # Redis answered, even if with an error
             raise error from exc

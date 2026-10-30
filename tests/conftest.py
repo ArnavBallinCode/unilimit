@@ -23,6 +23,18 @@ settings.register_profile("explore", max_examples=5_000, deadline=None)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
+@pytest.fixture(autouse=True)
+def _fresh_log_throttle() -> Iterator[None]:
+    """Failure logs are throttled per process; every test starts with a clean slate."""
+    from unilimit._logging import DEFAULT_INTERVAL, throttled
+
+    throttled.reset()
+    throttled.configure(DEFAULT_INTERVAL)
+    yield
+    throttled.reset()
+    throttled.configure(DEFAULT_INTERVAL)
+
+
 @pytest.fixture
 def clock() -> ManualClock:
     return ManualClock()

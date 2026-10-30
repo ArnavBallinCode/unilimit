@@ -36,6 +36,7 @@ sync/async parity, sans-I/O policy.
 | `Retry-After` as an HTTP date | slowapi (`retry_after="http-date"`) | `ResponseConfig.retry_after_format` | |
 | WebSocket limiter | fastapi-limiter (`WebSocketRateLimiter`) | `integrations/fastapi/websocket.py` | **Improvement:** limits both the handshake (close 1008) and messages, with atomic multi-rate rules |
 | Dependency-based FastAPI API | fastapi-limiter | `RateLimit` | **Improvement:** `identity=` dependencies, dedupe with middleware |
+| `in_memory_fallback` | slowapi | `Limiter(fallback=)` | Idea only, no code copied. **Improvements:** explicit, never silent (events, logs, `Decision.fallback`), only for fail-open rules so it never loosens fail-closed, sync and async, defined recovery semantics |
 | `@ratelimit` view decorator, `key="header:X-Name"`, `IPV4_MASK`, `method=` filter | django-ratelimit | `integrations/django/decorators.py`, `core/identity.py`, `Limiter(ipv4_prefix=)` | Idea only, no code copied. **Improvements:** several rules per view in one atomic batch, async views without blocking, rate not part of the storage key, trusted-proxy IPs instead of `REMOTE_ADDR`/first `X-Forwarded-For` |
 | Throttle classes keyed by scope with `DEFAULT_THROTTLE_RATES` | Django REST framework (BSD-3-Clause) | `integrations/drf/throttling.py` | Interface and settings conventions only, so migration is a class swap. **Improvements:** exact across processes, one atomic batch per view, refuses double counting |
 
@@ -43,7 +44,6 @@ sync/async parity, sans-I/O policy.
 
 | What | From | Milestone | Design notes |
 |---|---|---|---|
-| Degraded local limiting when Redis is down (`in_memory_fallback`) | slowapi | M6 | A third `fail_mode`, `"local"`, using a per-process `MemoryBackend`. Bounded (N workers × limit) instead of unlimited |
 | `query:<param>`, `post:<field>` key sources | django-ratelimit | Later | Callable keys cover them today; `post:` needs body parsing |
 | Response-based deduction (count only failed logins) | Flask-Limiter (`deduct_when`) | Later | Needs check-before / consume-after semantics; design carefully against atomicity |
 | Global enable switch | slowapi (`enabled=`) | M6 | For tests and incidents |

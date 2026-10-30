@@ -120,3 +120,17 @@ surprises you.
   same slot followed by `WAIT 1 5000` on the *same connection* (`WAIT` on a fresh connection
   returns at once: it only covers that connection's own writes; our first attempt used a
   fresh one and failed again on Redis 7.2.7). A failure like this in CI only is a race to fix, not noise.
+- **Throttled logging needs a per-test reset.** The throttle is process-wide state, so a
+  second test expecting the "first occurrence" log saw nothing. → autouse
+  `_fresh_log_throttle` fixture.
+- **mypy narrows properties across asserts**: `assert x.flag` then `assert not x.flag`
+  made the second statement "unreachable". Read the property through a function in tests.
+- **A benchmark harness can eat the quota it measures.** Warm-up hits on the shared key
+  made every library look like it admitted too few requests. → Warm up on other keys, and
+  sanity-check the exactness numbers before believing them.
+- **Library-level numbers are not framework-level numbers.** SlowAPI looks fast at HTTP
+  level because its blocking storage call runs on the event loop; fine at low concurrency,
+  a risk under load. Report what a library does, not only how quickly.
+- **`limits`' asyncio Redis storage needs `coredis<5`**, and it is invisible to a redis-py
+  round-trip counter. PyrateLimiter's built-in limiters share one bucket across names.
+- **`WAIT` only covers writes of its own connection** (see the failover lesson above).

@@ -3,14 +3,15 @@
 One consistent, production-grade rate-limiting core for Django, FastAPI and plain Python.
 
 > **Status: pre-alpha, under active development. Not on PyPI yet.**
-> Implemented so far (Milestones 2–5):
+> Implemented so far (Milestones 2–6):
 > - the framework-independent core;
 > - three algorithms: fixed window, sliding window counter and token bucket;
 > - atomic multi-rule evaluation;
 > - the in-memory backend;
 > - the Redis backend (standalone and Cluster, sync and async), tested against real Redis 6.2–8.8 and Valkey 8;
 > - the FastAPI integration (middleware, `RateLimit` dependency, headers, lifecycle): [docs/fastapi](docs/fastapi/quickstart.md);
-> - the Django integration (middleware, `@ratelimit`, sync and async) and Django REST Framework throttles: [docs/django](docs/django/quickstart.md), [docs/drf](docs/drf/quickstart.md).
+> - the Django integration (middleware, `@ratelimit`, sync and async) and Django REST Framework throttles: [docs/django](docs/django/quickstart.md), [docs/drf](docs/drf/quickstart.md);
+> - observability: structured events, Prometheus and OpenTelemetry exporters, throttled failure logging, an opt-in local fallback, and [reproducible benchmarks](docs/observability/benchmarks.md): [docs/observability](docs/observability/events.md).
 >
 > See [ARCHITECTURE.md](ARCHITECTURE.md) and [API_DESIGN.md](API_DESIGN.md).
 

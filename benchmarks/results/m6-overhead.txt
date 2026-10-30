@@ -1,0 +1,7 @@
+Observability overhead, in-memory sync `consume`, sliding_window, median of 7 x 30,000 calls (us).
+Apple M3, Python 3.13.9; variants run interleaved, 3 repetitions. Produced with benchmarks/overhead.py.
+pre-M6 = the commit before M6 (bfd8ae8).
+
+rep 1: pre-M6 6.51 | M6 no observer 6.31 | InMemoryMetrics 8.85 | Prometheus 12.52
+rep 2: pre-M6 6.76 | M6 no observer 6.53 | InMemoryMetrics 8.63 | Prometheus 9.93
+rep 3: pre-M6 6.41 | M6 no observer 6.27 | InMemoryMetrics 8.36 | Prometheus 9.52

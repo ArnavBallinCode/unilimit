@@ -53,11 +53,25 @@ drf = [
     "django>=5.2",
     "djangorestframework>=3.16",
 ]
+prometheus = [
+    "prometheus-client>=0.20",
+]
+otel = [
+    "opentelemetry-api>=1.25",
+]
 all = [
-    "unilimit[redis,fastapi,django,drf]",
+    "unilimit[redis,fastapi,django,drf,prometheus,otel]",
 ]
 
 [dependency-groups]
+bench = [
+    "coredis>=4,<5",
+    "fastapi-limiter>=0.2.0",
+    "limits>=5.8.0",
+    "psutil>=7.2.2",
+    "pyrate-limiter>=4.5.1",
+    "slowapi>=0.1.10",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -75,6 +89,9 @@ dev = [
     "gunicorn>=26.2.0",
     "django-stubs>=6.1.2",
     "djangorestframework-stubs>=3.18.1",
+    "prometheus-client>=0.20",
+    "opentelemetry-api>=1.25",
+    "opentelemetry-sdk>=1.25",
 ]
 
 [tool.hatch.version]
@@ -123,7 +140,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "N802", "PERF", "B008", "RUF012"]  # B008: Depends(...) defaults are idiomatic FastAPI
+"benchmarks/**" = ["S603", "E501", "PERF401", "E402"]  # a developer tool, not library code
+"tests/**" = ["S", "N802", "PERF", "B008", "RUF012", "PT018", "RUF059"]  # B008: Depends(...) defaults are idiomatic FastAPI
 
 [tool.mypy]
 strict = true
