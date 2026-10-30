@@ -110,3 +110,14 @@ decision needs the maintainer's agreement and a new entry here.
 | Benchmarks live in `benchmarks/` with an optional `bench` dependency group; raw JSON is committed | Reproducible and auditable; competitor libraries stay out of the dev environment and CI |
 | No performance claim without data; findings are published even when UniLimit is slower | See `docs/observability/benchmarks.md` |
 | Not done in M6: temporary bans, dashboards, hosted services, new algorithms | Out of scope |
+
+## M7
+
+| Decision | Rationale |
+|---|---|
+| Distributed connection concurrency limits via `WebSocketConnectionLimit`, `ConcurrencyLimit`, and `LeaseBackend` | Rate limits (ops/time) and concurrency limits (active leases/now) are distinct concepts and need dedicated semantics |
+| Connection leases use Redis Sorted Sets (`ZSET`) with expiration timestamp scores and key TTL | Single atomic Lua script handles acquire, renew, release; auto-expires leases on worker crash without state leaks; slot-pinned via `{digest}` for Redis Cluster |
+| Automated background heartbeat task (`heartbeat_interval`, default `lease_ttl / 2`) with cancellation on socket teardown | Transparent renewal for long-lived sockets without manual boilerplate; handles disconnects and task cancellations safely |
+| `WebSocketRateLimit.consume` supports weighted message budgets (`cost: int = 1`), with `gate(..., on_exceeded=...)` policies | Enables payload-size / complexity budgets and flexible responses (drop, reply error frame, close, raise) |
+| Pure Starlette integration exported under `unilimit.integrations.starlette` | Re-exports ASGI middleware and WebSocket limiters without requiring FastAPI |
+

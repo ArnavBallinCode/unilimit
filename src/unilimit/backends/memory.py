@@ -15,6 +15,7 @@ from unilimit.algorithms import Algorithm, State
 from unilimit.backends.base import (
     BatchResult,
     ConsumeOp,
+    LeaseResult,
     OpResult,
     check_unique_keys,
     evaluate_batch,
@@ -46,6 +47,7 @@ class MemoryBackend:
         self._clock: Clock = clock if clock is not None else MonotonicClock()
         self._max_keys = max_keys
         self._data: OrderedDict[str, tuple[Algorithm, State, int]] = OrderedDict()
+        self._leases: dict[str, dict[str, int]] = {}
         self._lock = threading.Lock()
         self._ops_since_sweep = 0
         self.live_evictions = 0
@@ -120,9 +122,63 @@ class MemoryBackend:
         with self._lock:
             for key in keys:
                 self._data.pop(key, None)
+                self._leases.pop(key, None)
 
     def close(self) -> None:
         """No resources to release; stored state is kept."""
+
+    def acquire_lease(
+        self, key: str, lease_id: str, max_concurrent: int, ttl_us: int, now_us: int = 0
+    ) -> LeaseResult:
+        with self._lock:
+            if now_us <= 0:
+                now_us = self._clock.now_us()
+            active = self._leases.setdefault(key, {})
+            # Purge expired leases
+            expired = [lid for lid, exp in active.items() if exp <= now_us]
+            for lid in expired:
+                del active[lid]
+
+            # Already held: renew and allow
+            if lease_id in active:
+                active[lease_id] = now_us + ttl_us
+                return LeaseResult(allowed=True, current=len(active), max_concurrent=max_concurrent)
+
+            if len(active) >= max_concurrent:
+                earliest_exp = min(active.values()) if active else now_us
+                retry_after_us = max(0, earliest_exp - now_us)
+                return LeaseResult(
+                    allowed=False,
+                    current=len(active),
+                    max_concurrent=max_concurrent,
+                    retry_after_us=retry_after_us,
+                )
+
+            active[lease_id] = now_us + ttl_us
+            return LeaseResult(allowed=True, current=len(active), max_concurrent=max_concurrent)
+
+    def renew_lease(self, key: str, lease_id: str, ttl_us: int, now_us: int = 0) -> bool:
+        with self._lock:
+            if now_us <= 0:
+                now_us = self._clock.now_us()
+            active = self._leases.get(key)
+            if active is None:
+                return False
+            expired = [lid for lid, exp in active.items() if exp <= now_us]
+            for lid in expired:
+                del active[lid]
+            if lease_id in active:
+                active[lease_id] = now_us + ttl_us
+                return True
+            return False
+
+    def release_lease(self, key: str, lease_id: str) -> None:
+        with self._lock:
+            active = self._leases.get(key)
+            if active is not None:
+                active.pop(lease_id, None)
+                if not active:
+                    self._leases.pop(key, None)
 
     # -- async protocol ----------------------------------------------------------------
 
@@ -137,6 +193,17 @@ class MemoryBackend:
 
     async def aclose(self) -> None:
         self.close()
+
+    async def aacquire_lease(
+        self, key: str, lease_id: str, max_concurrent: int, ttl_us: int, now_us: int = 0
+    ) -> LeaseResult:
+        return self.acquire_lease(key, lease_id, max_concurrent, ttl_us, now_us)
+
+    async def arenew_lease(self, key: str, lease_id: str, ttl_us: int, now_us: int = 0) -> bool:
+        return self.renew_lease(key, lease_id, ttl_us, now_us)
+
+    async def arelease_lease(self, key: str, lease_id: str) -> None:
+        self.release_lease(key, lease_id)
 
     # -- introspection -----------------------------------------------------------------
 

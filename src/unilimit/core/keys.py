@@ -84,6 +84,14 @@ def rate_limit_key(namespace: str, rule_name: str, algorithm: Algorithm, digest:
     )
 
 
+def concurrency_key(namespace: str, limit_name: str, digest: str) -> str:
+    """Storage key for concurrent connection leases under schema v1.
+
+    Format: ``<ns>:v1:cc:<name>:{<digest>}``
+    """
+    return f"{namespace}:{KEY_SCHEMA_VERSION}:cc:{rule_segment(limit_name)}:{{{digest}}}"
+
+
 # -- Redis Cluster hash slots (CRC16/XMODEM, as specified by Redis Cluster) ------------
 
 

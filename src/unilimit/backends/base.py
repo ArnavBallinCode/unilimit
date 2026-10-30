@@ -124,6 +124,16 @@ def peek_batch(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class LeaseResult:
+    """The outcome of a connection lease acquisition or verification."""
+
+    allowed: bool
+    current: int
+    max_concurrent: int
+    retry_after_us: int | None = None
+
+
 @runtime_checkable
 class SyncBackend(Protocol):
     def consume(self, ops: Sequence[ConsumeOp]) -> BatchResult:
@@ -153,3 +163,36 @@ class AsyncBackend(Protocol):
 @runtime_checkable
 class Backend(SyncBackend, AsyncBackend, Protocol):
     """A backend usable from both sync and async code (required by :class:`Limiter`)."""
+
+
+@runtime_checkable
+class SyncLeaseBackend(Protocol):
+    def acquire_lease(
+        self, key: str, lease_id: str, max_concurrent: int, ttl_us: int, now_us: int = 0
+    ) -> LeaseResult:
+        """Attempt to acquire a concurrent connection lease for key."""
+        ...
+
+    def renew_lease(self, key: str, lease_id: str, ttl_us: int, now_us: int = 0) -> bool:
+        """Renew an existing connection lease, extending its TTL."""
+        ...
+
+    def release_lease(self, key: str, lease_id: str) -> None:
+        """Release an active connection lease."""
+        ...
+
+
+@runtime_checkable
+class AsyncLeaseBackend(Protocol):
+    async def aacquire_lease(
+        self, key: str, lease_id: str, max_concurrent: int, ttl_us: int, now_us: int = 0
+    ) -> LeaseResult: ...
+
+    async def arenew_lease(self, key: str, lease_id: str, ttl_us: int, now_us: int = 0) -> bool: ...
+
+    async def arelease_lease(self, key: str, lease_id: str) -> None: ...
+
+
+@runtime_checkable
+class LeaseBackend(SyncLeaseBackend, AsyncLeaseBackend, Protocol):
+    """A backend that supports distributed concurrency leases in both sync and async."""

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -10,12 +11,21 @@ from typing import Any, Literal, get_args
 from urllib.parse import urlsplit
 
 from unilimit._logging import throttled
-from unilimit.backends.base import Backend, BatchResult, ConsumeOp, OpResult
+from unilimit.backends.base import (
+    AsyncLeaseBackend,
+    Backend,
+    BatchResult,
+    ConsumeOp,
+    OpResult,
+    SyncLeaseBackend,
+)
 from unilimit.backends.memory import MemoryBackend
+from unilimit.core.concurrency import ConcurrencyLimit, LeaseDecision, generate_lease_id
 from unilimit.core.context import RequestContext
 from unilimit.core.errors import BackendUnavailable, ConfigurationError, UnknownRuleError
 from unilimit.core.identity import Identity, IdentityConfig, TrustedProxies
 from unilimit.core.keys import (
+    concurrency_key,
     identity_digest,
     normalise_secret,
     rate_limit_key,
@@ -534,6 +544,7 @@ class Limiter:
         *,
         include_global: bool = True,
         skip_keys: Collection[str] = (),
+        cost: int | None = None,
     ) -> Decision:
         """Evaluate a request against the global rules and ``rules``.
 
@@ -541,7 +552,9 @@ class Limiter:
         enforcing rule allows the request. Counters whose storage key is in
         ``skip_keys`` (already consumed earlier in the same request) are left out.
         """
-        planned = plan(ctx, self._rules_for(rules, include_global), self._config, skip_keys)
+        planned = plan(
+            ctx, self._rules_for(rules, include_global), self._config, skip_keys, cost=cost
+        )
         if isinstance(planned, Decision):
             self._emit_decision(planned, "policy", None)
             return planned
@@ -571,8 +584,11 @@ class Limiter:
         *,
         include_global: bool = True,
         skip_keys: Collection[str] = (),
+        cost: int | None = None,
     ) -> Decision:
-        planned = plan(ctx, self._rules_for(rules, include_global), self._config, skip_keys)
+        planned = plan(
+            ctx, self._rules_for(rules, include_global), self._config, skip_keys, cost=cost
+        )
         if isinstance(planned, Decision):
             self._emit_decision(planned, "policy", None)
             return planned
@@ -594,6 +610,151 @@ class Limiter:
         decision = decide(planned, batch)
         self._emit_decision(decision, "backend", started)
         return decision
+
+    # -- concurrency lease API ---------------------------------------------------------
+
+    def resolve_identity(
+        self, ctx: RequestContext, key: str | Callable[..., Any] | Sequence[Any] = "ip"
+    ) -> Identity | None:
+        """Resolve an Identity from a RequestContext according to this Limiter's configuration."""
+        from unilimit.core.identity import IdentityResolver
+
+        resolver = IdentityResolver(ctx, self._config.identity)
+        sources = [key] if (isinstance(key, str) or callable(key)) else list(key)
+        return resolver.resolve(sources, "concurrency")
+
+    def lease_key_for(self, limit: ConcurrencyLimit | str, identity: str | Identity) -> str:
+        """The exact storage key that will be used for a concurrency lease."""
+        name = limit.name if isinstance(limit, ConcurrencyLimit) else limit
+        ident = identity if isinstance(identity, Identity) else Identity("custom", identity)
+        digest = identity_digest(ident.kind, ident.value, self._config.identity_secret)
+        return concurrency_key(self.namespace, name, digest)
+
+    def acquire_lease(
+        self,
+        limit: ConcurrencyLimit,
+        identity: str | Identity,
+        lease_id: str | None = None,
+    ) -> LeaseDecision:
+        """Attempt to acquire a concurrent connection lease for an identity."""
+        if not isinstance(self.backend, SyncLeaseBackend):
+            raise ConfigurationError(
+                f"Backend {getattr(self.backend, 'name', type(self.backend).__name__)!r} "
+                "does not support concurrency leases"
+            )
+        ident = identity if isinstance(identity, Identity) else Identity("custom", identity)
+        key = self.lease_key_for(limit, ident)
+        lid = lease_id if lease_id is not None else generate_lease_id()
+        ttl_us = int(limit.lease_ttl * 1_000_000)
+        started = self._clock()
+        try:
+            res = self.backend.acquire_lease(key, lid, limit.max_concurrent, ttl_us, 0)
+            self._on_success(started)
+        except BackendUnavailable as exc:
+            self._on_unavailable(exc, started, "acquire_lease")
+            if self.fail_mode == "open":
+                self._log_unavailable("fail_open", exc)
+                return LeaseDecision(
+                    allowed=True,
+                    current=1,
+                    max_concurrent=limit.max_concurrent,
+                    lease_id=lid,
+                    key=key,
+                    identity=ident,
+                    limit_name=limit.name,
+                )
+            raise
+        retry = (res.retry_after_us / 1_000_000.0) if res.retry_after_us is not None else None
+        return LeaseDecision(
+            allowed=res.allowed,
+            current=res.current,
+            max_concurrent=res.max_concurrent,
+            lease_id=lid,
+            key=key,
+            identity=ident,
+            limit_name=limit.name,
+            retry_after=retry,
+        )
+
+    async def aacquire_lease(
+        self,
+        limit: ConcurrencyLimit,
+        identity: str | Identity,
+        lease_id: str | None = None,
+    ) -> LeaseDecision:
+        """Asynchronously attempt to acquire a concurrent connection lease for an identity."""
+        if not isinstance(self.backend, AsyncLeaseBackend):
+            raise ConfigurationError(
+                f"Backend {getattr(self.backend, 'name', type(self.backend).__name__)!r} "
+                "does not support concurrency leases"
+            )
+        ident = identity if isinstance(identity, Identity) else Identity("custom", identity)
+        key = self.lease_key_for(limit, ident)
+        lid = lease_id if lease_id is not None else generate_lease_id()
+        ttl_us = int(limit.lease_ttl * 1_000_000)
+        started = self._clock()
+        try:
+            res = await self.backend.aacquire_lease(key, lid, limit.max_concurrent, ttl_us, 0)
+            self._on_success(started)
+        except BackendUnavailable as exc:
+            self._on_unavailable(exc, started, "acquire_lease")
+            if self.fail_mode == "open":
+                self._log_unavailable("fail_open", exc)
+                return LeaseDecision(
+                    allowed=True,
+                    current=1,
+                    max_concurrent=limit.max_concurrent,
+                    lease_id=lid,
+                    key=key,
+                    identity=ident,
+                    limit_name=limit.name,
+                )
+            raise
+        retry = (res.retry_after_us / 1_000_000.0) if res.retry_after_us is not None else None
+        return LeaseDecision(
+            allowed=res.allowed,
+            current=res.current,
+            max_concurrent=res.max_concurrent,
+            lease_id=lid,
+            key=key,
+            identity=ident,
+            limit_name=limit.name,
+            retry_after=retry,
+        )
+
+    def renew_lease(self, key: str, lease_id: str, ttl_seconds: float) -> bool:
+        """Extend the TTL of an active lease."""
+        if not isinstance(self.backend, SyncLeaseBackend):
+            return False
+        ttl_us = int(ttl_seconds * 1_000_000)
+        try:
+            return self.backend.renew_lease(key, lease_id, ttl_us, 0)
+        except BackendUnavailable:
+            return False
+
+    async def arenew_lease(self, key: str, lease_id: str, ttl_seconds: float) -> bool:
+        """Asynchronously extend the TTL of an active lease."""
+        if not isinstance(self.backend, AsyncLeaseBackend):
+            return False
+        ttl_us = int(ttl_seconds * 1_000_000)
+        try:
+            return await self.backend.arenew_lease(key, lease_id, ttl_us, 0)
+        except BackendUnavailable:
+            return False
+
+    def release_lease(self, key: str, lease_id: str) -> None:
+        """Release an active lease."""
+        if not isinstance(self.backend, SyncLeaseBackend):
+            return
+        with contextlib.suppress(BackendUnavailable):
+            self.backend.release_lease(key, lease_id)
+
+    async def arelease_lease(self, key: str, lease_id: str) -> None:
+        """Asynchronously release an active lease."""
+        if not isinstance(self.backend, AsyncLeaseBackend):
+            return
+        with contextlib.suppress(BackendUnavailable):
+            await self.backend.arelease_lease(key, lease_id)
 
     # -- lifecycle ---------------------------------------------------------------------
 
