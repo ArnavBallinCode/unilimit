@@ -46,6 +46,15 @@ pure `plan` and `decide`.
 | `integrations/fastapi/dependency.py` | `Policies` base, `RateLimit`, `RateLimitExceeded` | Injects `identity=` via `__signature__` |
 | `integrations/fastapi/websocket.py` | `WebSocketRateLimit` | Handshake close 1008; `consume()` per message |
 | `integrations/fastapi/_state.py` | Request-scoped state in `scope["state"]["unilimit"]`, context building | |
+| `integrations/_common.py` | `RequestState`, `build_rules`, `resolve_rules` | Shared by FastAPI, Django and DRF; no framework imports |
+| `integrations/django/conf.py` | `settings.UNILIMIT` loading, cache, `reset()` | Cleared on `setting_changed` |
+| `integrations/django/_request.py` | `RequestContext` from `HttpRequest`, sync and async user lookup, `aevaluate`, rejection rendering | ASGI async backend, WSGI sync backend |
+| `integrations/django/middleware.py` | `UniLimitMiddleware` (sync and async capable) | Global rules, headers |
+| `integrations/django/decorators.py` | `ratelimit` for sync/async functions and CBV `dispatch` | Rules built once, at import |
+| `integrations/django/asgi.py` | `with_lifespan` closes clients on shutdown | |
+| `integrations/django/checks.py`, `apps.py` | System checks `unilimit.E001`, `W001`, `W002` | Needs the app in `INSTALLED_APPS` |
+| `integrations/drf/throttling.py` | `UniLimit*Throttle`, `parse_drf_rate`, `ServiceUnavailable` | One batch per view; refuses double throttling |
+| `integrations/drf/checks.py` | `unilimit.E002`, `W003` | |
 | `testing.py` | `ManualClock` | Public test helper |
 
 ## Where does my change go?
@@ -58,5 +67,5 @@ pure `plan` and `decide`.
   - add property tests and differential tests.
 - **New key source** (such as `header:`): `core/identity.py`, `normalise_key_spec` and `IdentityResolver._raw`.
 - **New HTTP behaviour:** `http.py`, never the core.
-- **New framework:** `integrations/<name>/`. Build a `RequestContext`, call `Limiter`, render with `http.py`.
+- **New framework:** `integrations/<name>/`. Build a `RequestContext`, call `Limiter`, render with `http.py`. Django (`integrations/django/`) and DRF (`integrations/drf/`) are the second and third examples.
 - **Redis operational behaviour** (timeouts, breaker, pools): `backends/redis/backend.py`.

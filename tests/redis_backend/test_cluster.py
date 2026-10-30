@@ -280,9 +280,16 @@ async def test_primary_crash_and_failover(
     key = limiter.key_for(PER_USER, ident)
     ctx = RequestContext(user_id="failover")
     assert (await evaluate(limiter, mode, [PER_USER], ctx)).allowed
-    await asyncio.sleep(0.2)  # let the write replicate (replication is asynchronous)
 
     victim = disposable_cluster.node_for_slot(key_hash_slot(key))
+    # Replication is asynchronous, and a fixed sleep lost the race on Valkey 8.0.2 and
+    # Redis 7.2.7 in CI. WAIT only covers writes made on the same connection (on a fresh
+    # one it returns at once), so write a marker into the same slot, then WAIT: the
+    # replication stream is ordered, so the replica has the earlier consume as well.
+    hash_tag = key[key.index("{") : key.index("}") + 1]
+    with victim.client() as primary:
+        primary.set(f"{hash_tag}replicated", 1)
+        assert primary.wait(1, 5000) >= 1, "the write did not replicate"
     victim.stop()  # crash the primary that owns this identity's slot
 
     saw_degraded = False

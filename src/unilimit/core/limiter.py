@@ -62,6 +62,7 @@ class Limiter:
         on_missing: OnMissing = "deny",
         trusted_proxies: TrustedProxies | None = None,
         ipv6_prefix: int = 64,
+        ipv4_prefix: int = 32,
         identity_secret: str | bytes | None = None,
         api_key_header: str = "X-API-Key",
         tenant_header: str | None = None,
@@ -99,6 +100,7 @@ class Limiter:
             identity=IdentityConfig(
                 trusted_proxies=trusted_proxies,
                 ipv6_prefix=ipv6_prefix,
+                ipv4_prefix=ipv4_prefix,
                 api_key_header=api_key_header,
                 tenant_header=tenant_header,
             ),
@@ -157,6 +159,24 @@ class Limiter:
     @property
     def fail_mode(self) -> FailMode:
         return self._config.fail_mode
+
+    def needs_user(self, rules: Iterable[Rule] = (), *, include_global: bool = False) -> bool:
+        """Whether evaluating ``rules`` (and optionally the global rules) may read
+        ``RequestContext.user_id``.
+
+        True when a rule keys on ``"user"``, or has a callable key, ``when`` or
+        ``cost`` (any of which may read ``ctx.user_id``), or an access list names users.
+        Integrations use it to skip an authentication lookup (a session or database
+        query) when nothing needs the user.
+        """
+        selected = [*rules, *(self._global_rules if include_global else ())]
+        for rule in selected:
+            if rule.when is not None or callable(rule.cost):
+                return True
+            if any(src == "user" or callable(src) for src in rule.key):
+                return True
+        lists = (self._config.allow, self._config.deny)
+        return any(access is not None and bool(access.users) for access in lists)
 
     def get_rule(self, name: str) -> Rule:
         """The registered rule called ``name`` (raises :class:`UnknownRuleError`)."""

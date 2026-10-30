@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -20,6 +19,7 @@ from unilimit.core.rate import Duration, Rate
 from unilimit.core.result import Decision
 from unilimit.core.rule import Action, AlgorithmName, CostFunc, FailMode, OnMissing, Predicate, Rule
 from unilimit.http import ResponseConfig, ResponseSpec, rate_limit_headers, rejection_response
+from unilimit.integrations._common import build_rules, resolve_rules, scoped_rule
 from unilimit.integrations.fastapi._state import (
     RequestState,
     build_context,
@@ -90,41 +90,23 @@ class Policies:
         per_route: bool = False,
         limiter: Limiter | None = None,
     ) -> None:
-        kind = type(self).__name__
-        if not rules:
-            raise ConfigurationError(f"{kind} needs at least one rule or rule name")
-        if rate is not None or limit is not None or window is not None:
-            if len(rules) != 1 or not isinstance(rules[0], str):
-                raise ConfigurationError(
-                    f"an inline {kind} takes exactly one name: {kind}('name', rate='10/s')"
-                )
-            options: dict[str, Any] = {
-                "algorithm": algorithm,
-                "key": key if key is not None else ("user" if identity else "ip"),
-                "burst": burst,
-                "cost": cost,
-                "methods": methods,
-                "when": when,
-                "on_missing": on_missing,
-                "fail_mode": fail_mode,
-                "action": action,
-            }
-            if isinstance(rate, str) and limit is None and window is None:
-                # "10/second;1000/day": several rules, consumed atomically together.
-                self._rules: tuple[Rule | str, ...] = Rule.many(rules[0], rate, **options)
-            else:
-                self._rules = (Rule(rules[0], rate, limit=limit, window=window, **options),)
-        else:
-            customised = (key, burst, methods, when, on_missing, fail_mode)
-            if any(v is not None for v in customised) or cost != 1 or action != "reject":
-                raise ConfigurationError(
-                    "rule options need an inline rule (rate= or limit=/window=); "
-                    "set them on the Rule objects instead"
-                )
-            for r in rules:
-                if not isinstance(r, Rule | str):
-                    raise ConfigurationError(f"expected Rule objects or rule names, got {r!r}")
-            self._rules = rules
+        self._rules = build_rules(
+            rules,
+            rate=rate,
+            limit=limit,
+            window=window,
+            key=key,
+            default_key="user" if identity else "ip",
+            algorithm=algorithm,
+            burst=burst,
+            cost=cost,
+            methods=methods,
+            when=when,
+            on_missing=on_missing,
+            fail_mode=fail_mode,
+            action=action,
+            owner=type(self).__name__,
+        )
         if identity is not None and not callable(identity):
             raise ConfigurationError("identity must be a FastAPI dependency (a callable)")
         self._limiter = limiter
@@ -151,7 +133,7 @@ class Policies:
         return f"{type(self).__name__}({names})"
 
     def _resolve(self, limiter: Limiter) -> tuple[Rule, ...]:
-        return tuple(r if isinstance(r, Rule) else limiter.get_rule(r) for r in self._rules)
+        return resolve_rules(limiter, self._rules)
 
     def _rules_for(self, limiter: Limiter, conn: HTTPConnection) -> tuple[Rule, ...]:
         rules = self._resolve(limiter)
@@ -164,7 +146,7 @@ class Policies:
         cache_key = (methods, path)
         cached = self._route_rules.get(cache_key)
         if cached is None:
-            cached = tuple(_scoped(rule, f"{methods} {path}") for rule in rules)
+            cached = tuple(scoped_rule(rule, f"{methods} {path}") for rule in rules)
             self._route_rules[cache_key] = cached
         return cached
 
@@ -219,26 +201,6 @@ class RateLimit(Policies):
             for name, value in rate_limit_headers(state.results, config):
                 response.headers[name] = value
         return decision
-
-
-def _scoped(rule: Rule, route: str) -> Rule:
-    name = f"{rule.name}|{route}"
-    if len(name) > 200:
-        name = f"{rule.name[:150]}|{hashlib.sha256(route.encode()).hexdigest()[:16]}"
-    return Rule(
-        name,
-        rule.rate,
-        algorithm=rule.algorithm,
-        key=rule.key,
-        burst=rule.burst,
-        methods=rule.methods,
-        paths=rule.paths,
-        when=rule.when,
-        cost=rule.cost,
-        on_missing=rule.on_missing,
-        fail_mode=rule.fail_mode,
-        action=rule.action,
-    )
 
 
 def _app_state(conn: HTTPConnection, name: str) -> Any:

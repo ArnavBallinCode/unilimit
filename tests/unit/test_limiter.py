@@ -519,3 +519,20 @@ async def test_sync_and_async_paths_agree(clock: ManualClock) -> None:
         assert d1 == d2
         for c in clocks:
             c.advance(0.7)
+
+
+def test_needs_user() -> None:
+    by_ip = Rule("ip", "1/s")
+    by_user = Rule("user", "1/s", key="user")
+    chained = Rule("chain", "1/s", key="user_or_ip")
+    custom = Rule("custom", "1/s", key=lambda ctx: "x")
+    limiter = Limiter(MemoryBackend(), global_rules=[by_user])
+    assert not limiter.needs_user([by_ip])
+    assert limiter.needs_user([chained])
+    assert limiter.needs_user([custom])  # a callable may read ctx.user_id
+    assert limiter.needs_user([Rule("w", "1/s", when=lambda ctx: ctx.user_id is None)])
+    assert limiter.needs_user([Rule("c", "5/s", cost=lambda ctx: 1)])
+    assert limiter.needs_user(include_global=True)
+    with_lists = Limiter(MemoryBackend(), deny=AccessList(users=["evil"]))
+    assert with_lists.needs_user([by_ip])
+    assert not Limiter(MemoryBackend(), deny=AccessList(networks=["10.0.0.0/8"])).needs_user()

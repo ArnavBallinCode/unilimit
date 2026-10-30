@@ -95,3 +95,28 @@ surprises you.
 - **A property test can pass without the fix it is meant to guard** (a leak test passed
   because GC closed the sockets). → Always run a regression test against the unfixed
   code once.
+- **Exact-count tests against a listening server are not hermetic.** A `node` process
+  (local developer tooling that scans localhost ports) sent `GET /` to the test servers
+  and spent one unit of the global rule, so counts were off by one at random. → The
+  worker-test apps exempt `/`. When an exact count is off by exactly one, log
+  `User-Agent` and path server-side before suspecting the code.
+- **Django runs async views under WSGI in a fresh event loop per request.** Async Redis
+  clients are bound to their loop, so using them there opens (and leaks) a connection
+  per request. → Under WSGI the decorator uses the sync backend in a worker thread
+  (`aevaluate` in `integrations/django/_request.py`).
+- **Django's in-memory SQLite connections are never closed**, and the ASGI handler opens
+  one per request thread, so the leak check reports them. → Tests use a temp-file
+  database and close asgiref-thread connections after each test.
+- **`ClassVar` callables become bound methods when read from an instance** (mypy and at
+  runtime). A callable `key` on a throttle class must be set with `staticmethod`.
+- **DRF copies `DEFAULT_THROTTLE_CLASSES` onto `APIView` at import time**, so changing
+  the setting later does not affect existing views; tests set `throttle_classes` on views.
+- **`sed -i` and `cut` differ on macOS**: `sed -i ''` is required, and `&&` after a failed
+  `sed` silently skips the rest of a scripted edit. Prefer a Python edit that asserts the
+  pattern exists.
+- **Never wait a fixed time for asynchronous replication.** `test_primary_crash_and_failover`
+  slept 0.2 s before crashing the primary and lost the race on Valkey 8.0.2 in CI (the
+  promoted replica had not seen the write: `remaining` 4, not 3). → a marker `SET` in the
+  same slot followed by `WAIT 1 5000` on the *same connection* (`WAIT` on a fresh connection
+  returns at once: it only covers that connection's own writes; our first attempt used a
+  fresh one and failed again on Redis 7.2.7). A failure like this in CI only is a race to fix, not noise.

@@ -106,6 +106,30 @@ jobs:
           uv run $pins python -c "import fastapi, starlette; print(fastapi.__version__, starlette.__version__)"
           uv run $pins pytest tests/fastapi_integration tests/unit/test_http.py -ra
 
+  django-versions:
+    name: django ${{ matrix.versions.django }} / drf ${{ matrix.versions.drf }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        versions:
+          - { django: "5.2.*", drf: "3.16.*" }
+          - { django: "6.0.*", drf: "3.17.*" }
+          - { django: "6.1.*", drf: "3.18.*" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Redis (distribution package)
+        run: sudo apt-get update -q && sudo apt-get install -yq redis-server
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Run the Django and DRF suite against pinned versions
+        run: |
+          pins="--with django==${{ matrix.versions.django }} --with djangorestframework==${{ matrix.versions.drf }}"
+          uv run $pins python -c "import django, rest_framework; print(django.__version__, rest_framework.VERSION)"
+          uv run $pins pytest tests/django_integration tests/unit/test_http.py -ra
+
   wheel:
     runs-on: ubuntu-latest
     steps:
@@ -145,6 +169,78 @@ jobs:
               async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://t') as c:
                   assert [(await c.get('/')).status_code for _ in range(2)] == [200, 429]
           asyncio.run(main())
+          "
+      - name: Django and DRF extras install independently
+        run: |
+          uv venv /tmp/django-env
+          uv pip install --python /tmp/django-env/bin/python "$(ls dist/*.whl)[django]"
+          /tmp/django-env/bin/python -c "
+          import django
+          from django.conf import settings
+          settings.configure(SECRET_KEY='x', ROOT_URLCONF=__name__, ALLOWED_HOSTS=['*'],
+              MIDDLEWARE=['unilimit.integrations.django.UniLimitMiddleware'],
+              UNILIMIT={'URL': 'memory://'})
+          django.setup()
+          from django.http import HttpResponse
+          from django.test import Client
+          from django.urls import path
+          from unilimit.integrations.django import ratelimit
+          @ratelimit('x', rate='1/minute')
+          def view(request): return HttpResponse('ok')
+          urlpatterns = [path('', view)]
+          c = Client()
+          assert [c.get('/').status_code for _ in range(2)] == [200, 429]
+          try:
+              import rest_framework
+          except ImportError:
+              pass
+          else:
+              raise SystemExit('the django extra pulled in Django REST framework')
+          "
+          uv venv /tmp/drf-env
+          uv pip install --python /tmp/drf-env/bin/python "$(ls dist/*.whl)[drf]"
+          cat > /tmp/drf_smoke.py <<'PY'
+          import django
+          from django.conf import settings
+
+          settings.configure(
+              SECRET_KEY="x", ROOT_URLCONF=__name__, ALLOWED_HOSTS=["*"],
+              INSTALLED_APPS=["rest_framework"], UNILIMIT={"URL": "memory://"},
+              REST_FRAMEWORK={"DEFAULT_AUTHENTICATION_CLASSES": [], "UNAUTHENTICATED_USER": None,
+                              "DEFAULT_THROTTLE_RATES": {"anon": "1/minute"}},
+          )
+          django.setup()
+          from django.test import Client
+          from django.urls import path
+          from rest_framework.response import Response
+          from rest_framework.views import APIView
+          from unilimit.integrations.drf import UniLimitAnonRateThrottle
+
+          class V(APIView):
+              throttle_classes = [UniLimitAnonRateThrottle]
+              def get(self, request):
+                  return Response({})
+
+          urlpatterns = [path("", V.as_view())]
+          c = Client()
+          assert [c.get("/").status_code for _ in range(2)] == [200, 429]
+          PY
+          /tmp/drf-env/bin/python /tmp/drf_smoke.py
+      - name: All extra installs every integration
+        run: |
+          uv venv /tmp/all-env
+          uv pip install --python /tmp/all-env/bin/python "$(ls dist/*.whl)[all]"
+          /tmp/all-env/bin/python -c "
+          import django, fastapi, redis, rest_framework
+          import unilimit.backends.redis
+          import unilimit.integrations.fastapi
+          import unilimit.integrations.django
+          "
+          # The DRF integration needs configured settings to import; the smoke test above covers it.
+          /tmp/all-env/bin/python -c "
+          from django.conf import settings
+          settings.configure(INSTALLED_APPS=['rest_framework'], SECRET_KEY='x')
+          import unilimit.integrations.drf
           "
       - name: Redis extra installs and talks to a real server
         run: |
