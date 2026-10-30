@@ -44,6 +44,18 @@ result = await limiter.aconsume("api", "user:123")  # async twin
 limiter.peek("api", "user:123")  # never mutates state
 ```
 
+## Acknowledgements
+
+UniLimit builds on ideas from [limits](https://github.com/alisaifee/limits),
+[slowapi](https://github.com/laurentS/slowapi),
+[django-ratelimit](https://github.com/jsocol/django-ratelimit) and
+[fastapi-limiter](https://github.com/long2ice/fastapi-limiter). What was adopted, and
+why some things were not, is recorded in [context/prior-art.md](context/prior-art.md).
+
+## Contributing (humans and AI agents)
+
+Start with [AGENTS.md](AGENTS.md); deeper project knowledge is in [context/](context/README.md).
+
 ## Development
 
 ```bash
