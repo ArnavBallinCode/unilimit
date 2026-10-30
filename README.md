@@ -3,8 +3,8 @@
 **One rate limiter. Every Python backend.**
 
 [![CI](https://github.com/ArnavBallinCode/unilimit/actions/workflows/ci.yml/badge.svg)](https://github.com/ArnavBallinCode/unilimit/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/unilimit.svg)](https://pypi.org/project/unilimit/)
-[![Python](https://img.shields.io/pypi/pyversions/unilimit.svg)](https://pypi.org/project/unilimit/)
+[![PyPI](https://img.shields.io/pypi/v/unilimit?logo=pypi)](https://pypi.org/project/unilimit/)
+[![Python](https://img.shields.io/pypi/pyversions/unilimit?logo=python)](https://pypi.org/project/unilimit/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 UniLimit is a unified rate-limiting, concurrency-limiting, and quota-enforcement library for
