@@ -15,7 +15,7 @@ _Last updated: 2026-10-30, after Milestone 6 (observability, fallback, benchmark
 | M6 | Observability: events, metrics (Prometheus, OpenTelemetry), throttled failure logs, opt-in local fallback, benchmark tooling and results | **Done**; CI green on `e26a377` (PR #2) |
 | M7 | WebSocket maturity: distributed concurrent connection limits, leases, crash recovery, weighted budgets, rejection policies; Starlette integration | **Done** |
 | M8 | Backend & Core maturity: Redis Sentinel, TLS, custom backend contract & test runner | **Done** |
-| M9 | Security & reliability audit, release documentation | Next |
+| M9 | Security & reliability audit, release documentation | **Done** |
 | M10 | Packaging, distribution pipeline, TestPyPI and PyPI release | Next |
 
 Milestones start only when the maintainer asks.
