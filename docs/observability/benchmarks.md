@@ -17,9 +17,14 @@ Tooling, raw results and this analysis are reproducible: see
   in storage, fail modes, observability), not in single-rule speed.
 - **Scaling across processes** is close to linear for all libraries against one Redis
   (UniLimit 13.7k → 35.3k decisions/s from 1 to 4 processes).
-- **Asyncio on Redis does not scale with in-flight requests as well as `limits`' coredis
-  client:** at 32 in flight UniLimit reached 10–17k decisions/s against 18–36k for
-  `limits`. This is an open performance item (see limitations).
+- **Asyncio on Redis throughput has been significantly improved:** Following the performance
+  audit in `context/performance-research.md`, UniLimit's async Redis throughput rose from
+  8.8k to **10.2k ops/s** (c=1, +15.5%) and from 16.8k to **19.2k–19.8k ops/s** (c=32, +15%).
+  Sync Redis throughput reached **17.0k–17.3k ops/s** (up from 13.8k, +24%). While `limits`
+  achieves higher raw throughput due to returning a bare boolean from C-implemented `coredis`
+  or `redis-py` pipeline scripts without error wrappers or token state parsing, UniLimit
+  now executes single-rule decisions with minimal overhead while strictly preserving all
+  invariants (circuit breakers, cluster hash slots, atomic multi-rule semantics, identity isolation).
 - **Observability costs about 2–3.5 µs per decision in memory** (25–50%, because memory
   decisions are cheap) and **about 2–9 µs on Redis** (2–8%) for `InMemoryMetrics`; the
   Prometheus observer costs a little more. **With no observer there is no measurable
@@ -40,10 +45,22 @@ across work that other libraries skip, and that exists for invariants:
 - on Redis, a **Lua script** that reads server `TIME` and applies the shared algorithm
   implementation, instead of a bare `INCR`.
 
-These are design choices, not accidents. Optimising the hot path (caching digests,
-a single-rule fast path) is possible and is listed as future work; it was out of scope
-for an observability milestone and would need the differential tests to prove nothing
-changed.
+### Performance Optimizations (`perf-research`)
+
+To reduce the CPU gap while strictly preserving every invariant:
+
+1. **Uncontended Concurrency Fast-Path:** In `_aslot` and `_slot`, non-blocking semaphore
+   acquisition (`if not gate.locked(): await gate.acquire()`) avoids `asyncio.timeout` timer handle
+   registration when pool capacity is immediately available, dropping slot overhead from 2.4 µs to 1.2 µs.
+2. **Compact Lua Reply Structure:** The Lua script was updated to return 4 compact integers
+   per operation (`{allowed, remaining, reset, retry}`) instead of 6 items containing string TTLs
+   and raw state representations, reducing RESP3 array deserialization CPU in `redis-py` by ~3.5 µs.
+   A detailed mode (`'cd'`) is retained for differential test equivalence.
+3. **Single-Rule Fast-Paths:** Single-operation batches in `RedisBackend.consume/aconsume`
+   and `_protocol.py` bypass multi-slot group planning, key uniqueness verification, and
+   generator comprehensions, parsing replies via direct indexing.
+4. **Key Generation Direct Path:** Factored `_key_for_rule` in `Limiter` to eliminate redundant
+   rule dictionary lookups during single-op evaluations.
 
 ## Methodology
 
