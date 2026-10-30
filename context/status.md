@@ -11,7 +11,7 @@ _Last updated: 2026-10-30, after Milestone 5 (Django and DRF)._
 | M3 | Redis backend: Lua, standalone and Cluster, reliability | Done |
 | M4 | FastAPI integration: middleware, `RateLimit`, headers, lifecycle, docs | Done |
 | — | Prior-art adoptions: `limits` rate grammar, `WebSocketRateLimit`, HTTP-date `Retry-After` | Done |
-| M5 | Django: middleware (sync/async), `@ratelimit`, DRF throttles, `header:` keys, `ipv4_prefix`, docs | Done locally; CI not yet run on the M5 commit |
+| M5 | Django: middleware (sync/async), `@ratelimit`, DRF throttles, `header:` keys, `ipv4_prefix`, docs | **Done**; CI green on `45f4492` |
 | M6 | Observability hooks, log throttling, security/reliability hardening | Planned |
 | M7 | Benchmarks, MkDocs site, packaging, release | Planned |
 
@@ -27,7 +27,10 @@ GitHub Actions (`.github/workflows/ci.yml`), 18 jobs:
 - FastAPI 0.115–0.162 with Starlette 0.38–1.10;
 - wheel install checks.
 
-Last fully green run: commit `4914ab3` (M4).
+Last fully green run: commit `45f4492` (M5, PR #1): 19/19 checks. Django jobs: 188 tests each on
+Django 5.2.18/DRF 3.16.1, 6.0.9/3.17.2 and 6.1.2/3.18.3; the wheel job installs the
+`django`, `drf` and `all` extras and runs them. Two CI-only failures of
+`test_primary_crash_and_failover` (async replication race, see `lessons.md`) were fixed on the way.
 
 ## Tested environments
 
@@ -39,7 +42,7 @@ Last fully green run: commit `4914ab3` (M4).
   - 0.140.0 / 0.46.0
   - 0.140.0 / 1.10.0
   - 0.162.0 / 1.10.0
-- **Django / DRF** (the full `tests/django_integration` suite, 176 tests, on Redis and
+- **Django / DRF** (the full `tests/django_integration` suite, 188 tests, on Redis and
   Cluster):
   - 5.2.18 / 3.16.1 (oldest supported)
   - 6.0.9 / 3.17.2
