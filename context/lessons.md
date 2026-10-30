@@ -116,5 +116,7 @@ surprises you.
   pattern exists.
 - **Never wait a fixed time for asynchronous replication.** `test_primary_crash_and_failover`
   slept 0.2 s before crashing the primary and lost the race on Valkey 8.0.2 in CI (the
-  promoted replica had not seen the write: `remaining` 4, not 3). → `WAIT 1 5000` on the
-  primary before the crash. A failure like this in CI only is a race to fix, not noise.
+  promoted replica had not seen the write: `remaining` 4, not 3). → a marker `SET` in the
+  same slot followed by `WAIT 1 5000` on the *same connection* (`WAIT` on a fresh connection
+  returns at once: it only covers that connection's own writes; our first attempt used a
+  fresh one and failed again on Redis 7.2.7). A failure like this in CI only is a race to fix, not noise.
