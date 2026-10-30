@@ -280,9 +280,13 @@ async def test_primary_crash_and_failover(
     key = limiter.key_for(PER_USER, ident)
     ctx = RequestContext(user_id="failover")
     assert (await evaluate(limiter, mode, [PER_USER], ctx)).allowed
-    await asyncio.sleep(0.2)  # let the write replicate (replication is asynchronous)
 
     victim = disposable_cluster.node_for_slot(key_hash_slot(key))
+    # Replication is asynchronous: wait until a replica has the write instead of guessing
+    # a delay (a fixed sleep lost the race on Valkey 8.0.2 in CI, so the promoted replica
+    # had not seen the first request).
+    with victim.client() as primary:
+        assert primary.wait(1, 5000) >= 1, "the write did not replicate"
     victim.stop()  # crash the primary that owns this identity's slot
 
     saw_degraded = False

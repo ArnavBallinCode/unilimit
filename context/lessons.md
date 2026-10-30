@@ -114,3 +114,7 @@ surprises you.
 - **`sed -i` and `cut` differ on macOS**: `sed -i ''` is required, and `&&` after a failed
   `sed` silently skips the rest of a scripted edit. Prefer a Python edit that asserts the
   pattern exists.
+- **Never wait a fixed time for asynchronous replication.** `test_primary_crash_and_failover`
+  slept 0.2 s before crashing the primary and lost the race on Valkey 8.0.2 in CI (the
+  promoted replica had not seen the write: `remaining` 4, not 3). → `WAIT 1 5000` on the
+  primary before the crash. A failure like this in CI only is a race to fix, not noise.

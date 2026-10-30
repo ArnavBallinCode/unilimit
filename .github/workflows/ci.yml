@@ -226,6 +226,22 @@ jobs:
           assert [c.get("/").status_code for _ in range(2)] == [200, 429]
           PY
           /tmp/drf-env/bin/python /tmp/drf_smoke.py
+      - name: All extra installs every integration
+        run: |
+          uv venv /tmp/all-env
+          uv pip install --python /tmp/all-env/bin/python "$(ls dist/*.whl)[all]"
+          /tmp/all-env/bin/python -c "
+          import django, fastapi, redis, rest_framework
+          import unilimit.backends.redis
+          import unilimit.integrations.fastapi
+          import unilimit.integrations.django
+          "
+          # The DRF integration needs configured settings to import; the smoke test above covers it.
+          /tmp/all-env/bin/python -c "
+          from django.conf import settings
+          settings.configure(INSTALLED_APPS=['rest_framework'], SECRET_KEY='x')
+          import unilimit.integrations.drf
+          "
       - name: Redis extra installs and talks to a real server
         run: |
           sudo apt-get update -q && sudo apt-get install -yq redis-server
