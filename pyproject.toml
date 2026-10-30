@@ -23,12 +23,17 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Framework :: AsyncIO",
+    "Framework :: Django",
+    "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+    "Framework :: Django :: 6.1",
+    "Framework :: FastAPI",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries",
     "Typing :: Typed",
 ]
-# The core has no runtime dependencies. Extras (redis, django, fastapi, all) are
-# added in the milestones that implement them.
+# The core has no runtime dependencies. Integrations and Redis are extras: redis,
+# fastapi, django, drf, all.
 dependencies = []
 
 [project.urls]
@@ -40,6 +45,16 @@ redis = [
 ]
 fastapi = [
     "fastapi>=0.115",
+]
+django = [
+    "django>=5.2",
+]
+drf = [
+    "django>=5.2",
+    "djangorestframework>=3.16",
+]
+all = [
+    "unilimit[redis,fastapi,django,drf]",
 ]
 
 [dependency-groups]
@@ -54,6 +69,12 @@ dev = [
     "httpx>=0.28.1",
     "uvicorn>=0.30",
     "limits>=5.8.0",
+    "django>=5.2",
+    "djangorestframework>=3.18.3",
+    "pytest-django>=4.14.0",
+    "gunicorn>=26.2.0",
+    "django-stubs>=6.1.2",
+    "djangorestframework-stubs>=3.18.1",
 ]
 
 [tool.hatch.version]
@@ -81,6 +102,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 xfail_strict = true
 filterwarnings = ["error"]
+DJANGO_SETTINGS_MODULE = "tests.django_integration.settings"
+django_find_project = false
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
@@ -99,7 +123,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "N802", "PERF", "B008"]  # B008: Depends(...) defaults are idiomatic FastAPI
+"tests/**" = ["S", "N802", "PERF", "B008", "RUF012"]  # B008: Depends(...) defaults are idiomatic FastAPI
 
 [tool.mypy]
 strict = true

@@ -55,7 +55,10 @@ Mutation-checked: 8/8 deliberate Lua bugs were caught.
 - `test_processes_never_over_admit_one_identity` (8 processes, standalone and Cluster);
 - `test_concurrent_requests_never_over_admit` (ASGI);
 - `test_multiple_workers_share_exact_limits` (3 uvicorn workers);
-- `test_concurrent_cancellations_never_over_admit`.
+- `test_concurrent_cancellations_never_over_admit`;
+- Django: `test_concurrent_asgi_requests_never_over_admit`, `test_concurrent_wsgi_threads_never_over_admit`,
+  `test_two_application_instances_share_exact_limits` and `test_workers_share_exact_limits`
+  (3 uvicorn and 3 gunicorn workers over TCP, standalone and Cluster).
 
 ## 4. No blocking I/O on async paths
 
@@ -115,3 +118,35 @@ Schema `v1`: `<ns>:v1:rl:<rule>:<algo>:{<digest>}`. Stored values are `fw:…`, 
 and `tb:…` strings. Any incompatible change bumps the version. The hash tag must stay
 the only braces in the key; this is checked against a real server's `CLUSTER KEYSLOT`
 (`test_hash_slots_match_redis`, `test_cluster_is_real_and_slots_match_the_server`).
+
+## 10. A counter is consumed once per request (Django and DRF)
+
+The middleware, each `@ratelimit` decorator and the DRF throttles are separate atomic
+steps. Storage keys that an earlier step consumed are passed on as `skip_keys` and left
+out of later steps. All UniLimit throttles of one DRF view are planned and consumed as
+one batch (the first to run evaluates for the group; the others read the decision). A
+UniLimit throttle and a DRF built-in throttle on the same scope would count a request
+twice, so `ImproperlyConfigured` is raised at request time and `manage.py check` reports
+`unilimit.E002`.
+
+**Why:** the maintainer's M5 brief: "Do not silently run the same policy through both
+UniLimit and DRF's built-in throttling", and no double consumption.
+
+**Enforced by:**
+- `test_a_rule_in_middleware_and_decorator_is_consumed_once`;
+- `test_throttle_and_decorator_with_one_rule_consume_once`;
+- `test_several_throttles_are_one_atomic_batch`;
+- `test_builtin_and_unilimit_throttles_on_one_scope_are_refused`;
+- `test_checks_run_through_django`.
+
+## 11. Async-safe Django integration
+
+Under ASGI the async backend only; under WSGI the sync backend only. Django runs async
+views served by WSGI in a short-lived loop per request, and async Redis clients are bound
+to their loop, so the integration uses the sync backend in a worker thread there instead
+of creating (and leaking) a client per request. DRF throttles are synchronous by DRF's
+design; under ASGI DRF runs them in a thread, which is why they use the sync client.
+
+**Enforced by:** `test_wsgi_async_views_use_the_sync_client`,
+`test_throttles_under_asgi` and the leak checks (`filterwarnings = error`, GC after
+each test).

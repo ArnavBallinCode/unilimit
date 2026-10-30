@@ -13,7 +13,8 @@ limiter = Limiter.from_url(
     os.environ["UNILIMIT_TEST_REDIS_URL"],
     cluster=os.environ.get("UNILIMIT_TEST_CLUSTER") == "1",
     global_rules=[Rule("site", "400/day", algorithm="fixed_window")],
-    exempt_paths=["/health"],
+    # "/" is exempt: local tooling (port scanners) may probe it and would spend the budget.
+    exempt_paths=["/health", "/"],
 )
 app = FastAPI()
 setup(app, limiter)

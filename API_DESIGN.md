@@ -18,6 +18,7 @@ Design rules applied throughout:
 pip install unilimit              # core + in-memory backend, zero dependencies
 pip install "unilimit[redis]"     # + redis>=5.0
 pip install "unilimit[django]"    # + Django>=5.2
+pip install "unilimit[drf]"       # + Django>=5.2, djangorestframework>=3.16
 pip install "unilimit[fastapi]"   # + fastapi, starlette
 pip install "unilimit[all]"
 ```
@@ -63,6 +64,7 @@ limiter = Limiter(
     on_missing="deny",  # "deny" | "raise" | "skip"; per-rule override available
     trusted_proxies=None,  # TrustedProxies(...) — default trusts nothing
     ipv6_prefix=64,  # IPv6 clients are limited per /64 by default
+    ipv4_prefix=32,  # 32 = no grouping; 24 groups IPv4 clients by /24
     identity_secret=None,  # str | bytes; keyed hashing of identities (recommended)
     api_key_header="X-API-Key",
     tenant_header=None,
@@ -403,72 +405,88 @@ The HTTP middleware passes WebSockets through, so global rules do not apply to t
 
 ---
 
-## 6. Django
+## 6. Django and Django REST Framework — implemented in M5
+
+User guides, all executed by `tests/django_integration/test_docs.py`: [docs/django](docs/django/quickstart.md) and [docs/drf](docs/drf/quickstart.md).
+
+Install: `pip install "unilimit[django]"`, `"unilimit[drf]"` (adds `djangorestframework`) or `"unilimit[all]"`. The extras are independent: `unilimit[django]` does not install DRF, and the core imports neither.
 
 ### 6.1 Settings
 
 ```python
 # settings.py
 UNILIMIT = {
-    "LIMITER": "myproject.ratelimits.limiter",  # dotted path to a Limiter (recommended)
+    "LIMITER": "myproject.ratelimits.limiter",  # a Limiter, or a dotted path to one
     # or, for simple setups, a URL plus options passed to Limiter.from_url:
     # "URL": "redis://localhost:6379/0", "OPTIONS": {"namespace": "myproject"},
-    "RESPONSE": None,  # dotted path: Callable[[HttpRequest, Decision], HttpResponse]
+    "RESPONSE": None,  # a ResponseConfig or its dotted path
+    "REJECTION_VIEW": None,  # dotted path: (request, decision) -> HttpResponse
 }
-
+INSTALLED_APPS = [..., "unilimit.integrations.django"]  # optional: system checks
 MIDDLEWARE = [
-    # after AuthenticationMiddleware so "user" keys work
+    "django.contrib.sessions.middleware.SessionMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "unilimit.integrations.django.UniLimitMiddleware",
-    ...,
+    "unilimit.integrations.django.UniLimitMiddleware",  # after authentication
 ]
 ```
 
-Configuration is validated in `AppConfig.ready()` when `"unilimit.integrations.django"` is in `INSTALLED_APPS`. That gives early, startup-time errors and a Django system check (`unilimit.E001`, …). Installing the app is optional; without it, validation happens on first use.
+Exactly one of `LIMITER` and `URL` is required; unknown keys raise `ImproperlyConfigured`. The configuration loads on first use and is cached; `override_settings(UNILIMIT=...)` rebuilds it (a limiter built from `URL` has its sync client closed).
 
-`UniLimitMiddleware` supports both sync and async (`sync_capable = async_capable = True`). Under ASGI with an async chain it uses **only** the async backend. In async mode the user is resolved with `await request.auser()`.
+With `"unilimit.integrations.django"` in `INSTALLED_APPS`, `manage.py check` reports: `unilimit.E001` (missing or invalid `UNILIMIT`), `unilimit.W001` (middleware before `AuthenticationMiddleware` while global rules need the user), `unilimit.W002` (global rules without the middleware), `unilimit.E002` (a DRF built-in and a UniLimit throttle on one scope) and `unilimit.W003` (a DRF rate such as `"1/month"` that DRF reads as per minute).
 
-**Global and view rules in one atomic batch [M5].** The middleware consumes in `process_view`, where the resolved view and the rules attached by `@ratelimit` are both known. Global rules and view rules therefore form a single batch. Without the middleware, `@ratelimit` evaluates its own rules as one batch.
+`UniLimitMiddleware` is sync and async capable. Under ASGI with an async chain it uses only the async backend and resolves the user with `await request.auser()`. Under WSGI it uses the sync backend. Async views served by WSGI run in a short-lived event loop per request, so the decorator uses the sync backend in a worker thread there (async clients are bound to their loop).
+
+**Order of enforcement.** (1) the middleware: exemptions, access lists, global rules, before URL resolution; (2) `@ratelimit` decorators, outermost first; (3) DRF throttles, after DRF authentication. Each step is one atomic batch. A counter already consumed by an earlier step is skipped by later ones (`skip_keys`), so it is never consumed twice. Headers describe the most restrictive counter of all steps. The state is available as `request_state(request)` (`request.unilimit`).
 
 ### 6.2 View decorator
 
 ```python
-from django.http import JsonResponse
+from django.utils.decorators import method_decorator
 from unilimit.integrations.django import ratelimit
 
 
-@ratelimit("100/minute", key="user")
-def endpoint(request):
-    return JsonResponse({"ok": True})
+@ratelimit("search", rate="10/minute")  # inline rule named "search", keyed by IP
+def search(request): ...
 
 
-@ratelimit("10/second", "1000/day", key="user_or_ip")
-async def async_endpoint(request):  # async views detected automatically
-    return JsonResponse({"ok": True})
+@ratelimit("api", rate="10/second;1000/day", key="user_or_ip")  # one atomic batch
+async def api(request): ...  # async views are detected
 
 
-# class-based views
-from django.utils.decorators import method_decorator
+@ratelimit("free-tier", "burst")  # rules registered on the Limiter, by name
+def tiered(request): ...
 
 
-@method_decorator(ratelimit("5/minute", key="ip", methods={"POST"}), name="dispatch")
+@method_decorator(ratelimit("login", rate="5/minute", methods=["POST"]), name="dispatch")
 class LoginView(View): ...
 ```
 
-`ratelimit(*rules, key="ip", scope=None, methods=None, cost=1, limiter=None)`. The default scope is the view's `module.qualname`, which is stable across workers and deploys. On rejection the decorator **returns** a 429 `HttpResponse` (or the `RESPONSE` override) rather than raising, so it works without the middleware. When allowed, it adds headers to the view's response.
+`ratelimit(*rules, rate=None, limit=None, window=None, key=None, algorithm="sliding_window", burst=None, cost=1, methods=None, when=None, on_missing=None, fail_mode=None, action="reject", limiter=None)`. Positional arguments are rule names or `Rule` objects; without any, the inline rule is named after the view (`module.qualname`). Inline rules key on `"ip"` by default. On rejection the decorator **returns** the response (429, or `REJECTION_VIEW`) instead of raising, so it works without the middleware; when it runs without the middleware it adds headers to the view's response. Invalid arguments and unknown rule names fail at import time. It decorates functions; class-based views use `method_decorator(..., name="dispatch")`.
 
 ### 6.3 Django REST Framework
 
 ```python
-from unilimit.integrations.django.drf import UniLimitThrottle
+REST_FRAMEWORK = {
+    "DEFAULT_THROTTLE_CLASSES": [
+        "unilimit.integrations.drf.UniLimitAnonRateThrottle",
+        "unilimit.integrations.drf.UniLimitUserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {"anon": "100/day", "user": "1000/day"},
+}
 
 
-class ItemViewSet(viewsets.ModelViewSet):
+class ItemView(APIView):
     throttle_classes = [UniLimitThrottle]
-    unilimit_rules = [Rule("items", rate="100/minute", key="user")]
+    unilimit_rules = [Rule("items", "100/minute", key="user")]
 ```
 
-DRF evaluates throttles **after authentication**, so `key="user"` sees token- and session-authenticated users. The `@ratelimit` decorator cannot see them. `UniLimitThrottle` maps rejections to DRF's own `Throttled` (429 with `Retry-After`). Success headers are added by `UniLimitMiddleware` when it is installed. It can also be configured globally through `DEFAULT_THROTTLE_CLASSES` together with `UNILIMIT["DRF_DEFAULT_RULES"]`.
+`UniLimitAnonRateThrottle`, `UniLimitUserRateThrottle` and `UniLimitScopedRateThrottle` replace DRF's classes of the same names, with the same `scope`, `throttle_scope` and `DEFAULT_THROTTLE_RATES` conventions. `UniLimitRateThrottle` is the base for custom scopes (`scope`, `rate`, `key`, `algorithm`, `fail_mode`, `on_missing`, `when`). `UniLimitThrottle` takes `Rule`s from the view's `unilimit_rules`. All UniLimit throttles of a view are evaluated as one atomic batch.
+
+Throttles run after DRF authentication, so `key="user"` sees token, JWT and session users. A rejection raises DRF's `Throttled` (429, `Retry-After` from the rejecting throttle only), so `EXCEPTION_HANDLER` and renderers apply. `PermissionDenied` (403) is raised for deny-listed clients and missing identities with `on_missing="deny"`; `ServiceUnavailable` (503) when Redis is down and `fail_mode="closed"`. DRF rates parse as DRF does (first letter of the period decides); anything else uses the UniLimit grammar. A built-in and a UniLimit throttle on one scope raise `ImproperlyConfigured`. Client IPs come from `Limiter(trusted_proxies=...)`, not `NUM_PROXIES`.
+
+### 6.4 Shutdown
+
+Django's ASGI handler has no lifespan support, so `unilimit.integrations.django.asgi.with_lifespan(get_asgi_application())` closes the limiter's Redis clients when the server stops. WSGI servers have no hook; clients are released at process exit.
 
 ---
 

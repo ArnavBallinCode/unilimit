@@ -247,3 +247,36 @@ def test_request_context_normalisation() -> None:
     assert ctx.headers["x-a"] == "1"
     with pytest.raises(TypeError):
         ctx.headers["x-b"] = "2"  # type: ignore[index]
+
+
+# -- header: keys and IPv4 grouping (after django-ratelimit) -----------------------------
+
+
+def test_header_key_sources() -> None:
+    assert normalise_key_spec("header:X-Client-Id") == ("header:x-client-id",)
+    assert normalise_key_spec(["header:X-A", "ip"]) == ("header:x-a", "ip")
+    for bad in ("header:", "header:bad name", "header:a/b"):
+        with pytest.raises(ConfigurationError, match="header"):
+            normalise_key_spec(bad)
+    r = IdentityResolver(RequestContext(peer="1.2.3.4", headers={"X-B": "same"}), IdentityConfig())
+    assert r.resolve(("header:x-a", "header:x-b"), "r") == Identity("header", "x-b:same")
+    other = IdentityResolver(RequestContext(headers={"X-A": "same"}), IdentityConfig())
+    # Same value under different header names: different identities, different counters.
+    assert other.resolve(("header:x-a", "header:x-b"), "r") != r.resolve(
+        ("header:x-a", "header:x-b"), "r"
+    )
+    assert r.resolve(("header:x-missing",), "r") is None
+
+
+def test_ipv4_grouping() -> None:
+    v4 = ipaddress.IPv4Address("198.51.100.77")
+    assert normalise_client_ip(v4, 64) == "198.51.100.77"  # default: no grouping
+    assert normalise_client_ip(v4, 64, 24) == "198.51.100.0/24"
+    assert resolve_ip("198.51.100.1", ipv6_prefix=64) != resolve_ip("198.51.100.2")
+    grouped = IdentityConfig(ipv4_prefix=24)
+    a = IdentityResolver(RequestContext(peer="198.51.100.1"), grouped).client_ip
+    b = IdentityResolver(RequestContext(peer="198.51.100.200"), grouped).client_ip
+    assert a == b == "198.51.100.0/24"
+    for bad in (0, 33, True):
+        with pytest.raises(ConfigurationError, match="ipv4_prefix"):
+            IdentityConfig(ipv4_prefix=bad)

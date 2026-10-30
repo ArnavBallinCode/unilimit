@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Instructions for AI coding agents (and humans) working on **UniLimit**: a rate-limiting
-library for Python with one core shared by FastAPI, Django (planned) and plain Python,
+library for Python with one core shared by FastAPI, Django (plus DRF) and plain Python,
 backed by Redis or memory. This file is the source of truth for agent instructions;
 `CLAUDE.md` and `.github/copilot-instructions.md` point here.
 
@@ -11,14 +11,15 @@ task before changing code.
 ## Status
 
 Pre-alpha, built milestone by milestone. Done: core, algorithms, memory backend, Redis
-backend (standalone and Cluster), FastAPI integration. Next: Django (M5). Details are
-in [`context/status.md`](context/status.md).
+backend (standalone and Cluster), FastAPI integration, Django and DRF integrations (M5).
+Next: observability and hardening (M6), only when asked. Details are in
+[`context/status.md`](context/status.md).
 
 ## Commands
 
 ```bash
 uv sync                                   # install everything (Python >= 3.11)
-uv run pytest                             # full suite (~1,200 tests, ~90 s)
+uv run pytest                             # full suite (~1,400 tests, ~2 min)
 uv run pytest tests/unit                  # fast, no Redis needed
 uv run ruff check . && uv run ruff format --check .
 uv run mypy                               # strict, src and tests
@@ -35,6 +36,7 @@ Other useful runs:
 
 ```bash
 uv run --with fastapi==0.115.0 pytest tests/fastapi_integration   # oldest supported FastAPI
+uv run --with django==5.2.* --with djangorestframework==3.16.* pytest tests/django_integration
 HYPOTHESIS_PROFILE=explore uv run pytest tests/unit/algorithms    # deep property fuzzing
 UNILIMIT_DIFF_EXAMPLES=5000 uv run pytest tests/redis_backend/test_lua_differential.py
 ```
@@ -50,8 +52,12 @@ src/unilimit/
   backends/        protocols + evaluate_batch (reference), memory, redis/ (Lua + client)
   http.py          framework-free headers and rejection responses
   integrations/    fastapi/ (middleware, RateLimit, WebSocketRateLimit, setup)
-tests/             unit/, conformance/, concurrency/, redis_backend/, fastapi_integration/
-docs/fastapi/      user guides; every ```python block is executed by the tests
+                   django/ (middleware, @ratelimit, settings, ASGI lifespan, checks)
+                   drf/ (throttles), _common.py (rule building shared by integrations)
+tests/             unit/, conformance/, concurrency/, redis_backend/, fastapi_integration/,
+                   django_integration/ (Django and DRF)
+docs/fastapi/, docs/django/, docs/drf/
+                   user guides; every ```python block is executed by the tests
 context/           agent-oriented knowledge: status, decisions, lessons, map, testing
 ARCHITECTURE.md    design and rationale (authoritative)
 API_DESIGN.md      public API (authoritative)
@@ -80,9 +86,14 @@ ask; do not weaken the test. Rationale is in [`context/invariants.md`](context/i
 7. **Time.** Redis uses server `TIME`; times are integer microseconds; stored floats use
    `%.17g`.
 8. **Core stays framework-free.** `core/`, `algorithms/`, `backends/` and `http.py`
-   never import FastAPI, Starlette or Django. Core has no runtime dependencies.
+   never import FastAPI, Starlette, Django or DRF. Core has no runtime dependencies.
+   The Django integration never imports DRF; each extra installs on its own.
 9. **Keys are versioned.** Changing the stored format or key schema requires a new
    schema version (`v1` today).
+10. **A counter is consumed once per request.** Middleware, `@ratelimit` and DRF
+    throttles are separate atomic steps; a counter an earlier step consumed is skipped
+    (`skip_keys`). All UniLimit throttles of a DRF view are one batch, and a UniLimit
+    throttle never runs alongside a DRF built-in on the same scope.
 
 ## Coding conventions
 
@@ -105,9 +116,10 @@ Details: [`context/testing.md`](context/testing.md).
 - Use `ManualClock` for time. Assert exact counts, not timings.
 - New algorithm or Lua logic needs Hypothesis properties *and* differential tests, and
   should be mutation-checked (break the code and confirm a test fails).
-- Every `docs/fastapi/*.md` page is executed by `tests/fastapi_integration/test_docs.py`.
-  Examples must run as written, using `redis://localhost:6379/0`, which the test
-  substitutes.
+- Every `docs/fastapi/*.md` page is executed by `tests/fastapi_integration/test_docs.py`,
+  and every `docs/django/*.md` and `docs/drf/*.md` page by
+  `tests/django_integration/test_docs.py`. Examples must run as written, using
+  `redis://localhost:6379/0`, which the test substitutes.
 - Tests run a GC pass after each Redis or FastAPI test. A `ResourceWarning` means you
   leaked a client or socket: close it.
 - Never name a test directory after a third-party package (`tests/redis/`,

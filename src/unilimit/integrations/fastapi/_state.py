@@ -3,47 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from typing import Any
 
 from starlette.requests import HTTPConnection
 from starlette.types import Scope
 
 from unilimit.core.context import RequestContext
-from unilimit.core.limiter import Limiter
-from unilimit.core.result import Decision, RateLimitResult
-from unilimit.http import ResponseConfig
+from unilimit.integrations._common import RequestState as RequestState
 
 STATE_KEY = "unilimit"
 
 UserResolver = Callable[[HTTPConnection], "str | int | None"]
-
-
-@dataclass
-class RequestState:
-    """What UniLimit knows about the current request.
-
-    Stored in ``scope["state"]["unilimit"]``, so endpoints can read it as
-    ``request.state.unilimit``.
-    """
-
-    limiter: Limiter | None = None
-    response: ResponseConfig | None = None
-    middleware: bool = False
-    results: list[RateLimitResult] = field(default_factory=list)
-    """Enforced results of every admitting decision so far, for response headers."""
-    consumed: set[str] = field(default_factory=set)
-    """Storage keys already consumed in this request; never consumed twice."""
-    decisions: list[Decision] = field(default_factory=list)
-
-    def record(self, decision: Decision) -> None:
-        self.decisions.append(decision)
-        if decision.allowed:
-            for result in decision.results:
-                if result.storage_key is not None and not result.degraded:
-                    self.consumed.add(result.storage_key)
-                if result.enforced:
-                    self.results.append(result)
 
 
 def request_state(scope: Scope) -> RequestState:

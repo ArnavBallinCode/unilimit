@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import Literal, TypeAlias, cast
+from typing import Literal, TypeAlias
 
 from unilimit._logging import logger
 from unilimit.core.context import RequestContext
@@ -20,8 +21,12 @@ MAX_IDENTITY_LENGTH = 1024
 
 BuiltinKey = Literal["ip", "user", "user_or_ip", "api_key", "tenant", "global"]
 KeyFunc = Callable[[RequestContext], "str | int | None"]
-KeySource = Literal["ip", "user", "api_key", "tenant", "global"] | KeyFunc
-KeySpec = BuiltinKey | KeyFunc | Sequence["BuiltinKey | KeyFunc"]
+KeySource = Literal["ip", "user", "api_key", "tenant", "global"] | str | KeyFunc
+"""A built-in source, ``"header:<Name>"`` (stored lower-cased), or a callable."""
+KeySpec = BuiltinKey | str | KeyFunc | Sequence["BuiltinKey | str | KeyFunc"]
+
+HEADER_PREFIX = "header:"
+_HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")  # an RFC 9110 token
 
 _BUILTIN_SOURCES = frozenset({"ip", "user", "api_key", "tenant", "global"})
 
@@ -65,11 +70,11 @@ class Identity:
 
 def normalise_key_spec(spec: KeySpec) -> tuple[KeySource, ...]:
     """Validate a key spec and flatten it into an ordered fallback chain."""
-    items: Sequence[BuiltinKey | KeyFunc]
+    items: Sequence[BuiltinKey | str | KeyFunc]
     if isinstance(spec, str):
         items = (spec,)
     elif isinstance(spec, Sequence):
-        items = cast("Sequence[BuiltinKey | KeyFunc]", spec)
+        items = spec
     elif callable(spec):
         items = (spec,)
     else:
@@ -80,11 +85,16 @@ def normalise_key_spec(spec: KeySpec) -> tuple[KeySource, ...]:
     for item in items:
         if item == "user_or_ip":
             out.extend(("user", "ip"))
+        elif isinstance(item, str) and item.lower().startswith(HEADER_PREFIX):
+            name = item[len(HEADER_PREFIX) :].strip()
+            if not _HEADER_NAME.fullmatch(name):
+                raise ConfigurationError(f"invalid header key {item!r}; use 'header:<Name>'")
+            out.append(HEADER_PREFIX + name.lower())
         elif isinstance(item, str):
             if item not in _BUILTIN_SOURCES:
                 raise ConfigurationError(
-                    f"unknown key {item!r}; expected one of "
-                    "'ip', 'user', 'user_or_ip', 'api_key', 'tenant', 'global' or a callable"
+                    f"unknown key {item!r}; expected one of 'ip', 'user', 'user_or_ip', "
+                    "'api_key', 'tenant', 'global', 'header:<Name>' or a callable"
                 )
             out.append(item)
         elif callable(item):
@@ -122,9 +132,14 @@ def parse_ip(text: str) -> IPAddress | None:
     return addr
 
 
-def normalise_client_ip(addr: IPAddress, ipv6_prefix: int) -> str:
-    """IPv4 as-is; IPv6 aggregated to its ``/ipv6_prefix`` network."""
-    if isinstance(addr, ipaddress.IPv4Address) or ipv6_prefix == 128:
+def normalise_client_ip(addr: IPAddress, ipv6_prefix: int, ipv4_prefix: int = 32) -> str:
+    """The address, or its network when grouped: IPv6 by ``/ipv6_prefix`` (default
+    /64), IPv4 by ``/ipv4_prefix`` (default /32, meaning no grouping)."""
+    if isinstance(addr, ipaddress.IPv4Address):
+        if ipv4_prefix == 32:
+            return str(addr)
+        return str(ipaddress.IPv4Network((addr, ipv4_prefix), strict=False))
+    if ipv6_prefix == 128:
         return str(addr)
     return str(ipaddress.IPv6Network((addr, ipv6_prefix), strict=False))
 
@@ -213,6 +228,7 @@ class TrustedProxies:
 class IdentityConfig:
     trusted_proxies: TrustedProxies | None = None
     ipv6_prefix: int = 64
+    ipv4_prefix: int = 32
     api_key_header: str = "x-api-key"
     tenant_header: str | None = None
 
@@ -223,6 +239,12 @@ class IdentityConfig:
             or not 1 <= self.ipv6_prefix <= 128
         ):
             raise ConfigurationError("ipv6_prefix must be an integer between 1 and 128")
+        if (
+            isinstance(self.ipv4_prefix, bool)
+            or not isinstance(self.ipv4_prefix, int)
+            or not 1 <= self.ipv4_prefix <= 32
+        ):
+            raise ConfigurationError("ipv4_prefix must be an integer between 1 and 32")
         object.__setattr__(self, "api_key_header", self.api_key_header.lower())
         if self.tenant_header is not None:
             object.__setattr__(self, "tenant_header", self.tenant_header.lower())
@@ -263,7 +285,7 @@ class IdentityResolver:
         addr = self.client_addr
         if addr is None or isinstance(addr, str):
             return addr
-        return normalise_client_ip(addr, self.config.ipv6_prefix)
+        return normalise_client_ip(addr, self.config.ipv6_prefix, self.config.ipv4_prefix)
 
     def _raw(self, source: KeySource) -> tuple[str, object]:
         ctx, cfg = self.ctx, self.config
@@ -279,6 +301,12 @@ class IdentityResolver:
             if cfg.tenant_header is None:
                 raise ConfigurationError("key 'tenant' requires Limiter(tenant_header=...)")
             return "tenant", ctx.headers.get(cfg.tenant_header)
+        if source.startswith(HEADER_PREFIX):
+            name = source[len(HEADER_PREFIX) :]
+            value = ctx.headers.get(name)
+            # The header name is part of the identity, so different headers in one
+            # fallback chain never share a counter.
+            return "header", None if value is None else f"{name}:{value}"
         return "global", "*"
 
     def resolve(self, sources: Sequence[KeySource], rule_name: str) -> Identity | None:

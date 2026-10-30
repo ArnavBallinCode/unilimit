@@ -66,4 +66,27 @@ decision needs the maintainer's agreement and a new entry here.
 | Multi-rate inline `RateLimit` creates rules named `"{name}:{rate}"`, consumed atomically | Each rate keeps its own counter |
 | `WebSocketRateLimit`: handshake closes with 1008; `consume()` never raises | The application decides how to treat a rejected message |
 | `ResponseConfig.retry_after_format="http-date"` | slowapi parity |
-| `in_memory_fallback`-style degraded mode → M6; `header:`/`query:` keys and IPv4 masks → M5 | Larger semantic changes, belonging with those milestones |
+| `in_memory_fallback`-style degraded mode → M6; `header:`/`query:` keys and IPv4 masks → M5 (`header:` and `ipv4_prefix` done; `query:`/`post:` not) | Larger semantic changes, belonging with those milestones |
+
+## M5
+
+| Decision | Rationale |
+|---|---|
+| Global rules (middleware), `@ratelimit` and DRF throttles are separate atomic steps, deduplicated by storage key (`skip_keys`) | Same reasoning as M4. Supersedes the M1 sketch that put global and view rules in one batch in `process_view`: DRF identities exist only after DRF authentication, and views without a decorator need no second step |
+| `ratelimit(...)` mirrors FastAPI's `RateLimit` (names, inline `rate=`, `Rule` objects, `key=`), not the M1 `ratelimit("100/minute")` string form | One mental model across frameworks; a string is a rule name everywhere |
+| DRF lives in `unilimit.integrations.drf`, not `...django.drf`; the Django package never imports DRF | `unilimit[django]` must not need DRF; each extra installs alone (CI wheel job checks it) |
+| Settings are `UNILIMIT = {LIMITER | URL, OPTIONS, RESPONSE, REJECTION_VIEW}`; loaded lazily, cached, cleared on `setting_changed` | `override_settings` in tests; no import-time work or hidden globals. `UNILIMIT["RESPONSE"]` is a `ResponseConfig` (not a callable, as sketched in M1); `REJECTION_VIEW` is the callable |
+| ASGI uses the async backend; WSGI uses the sync backend, including for async views (run in a worker thread) | Django runs async views under WSGI in a new loop per request; async Redis clients are per loop, so one client per request would leak (invariant 11) |
+| `@ratelimit` evaluates with Django's `request.user`; DRF users come only from the DRF throttles | DRF authenticates inside the view; the decorator cannot know DRF users. Documented in the docs and API_DESIGN |
+| ASGI user lookup is `await request.auser()`, and only when `Limiter.needs_user(...)` says a rule may read it | Avoids a session or database query on every request |
+| `Limiter.needs_user(rules, include_global=...)` is a small public addition | Integrations need it to skip user resolution; no behavioural change to the core |
+| `header:<Name>` key source and `Limiter(ipv4_prefix=...)` in the core | Adopted from django-ratelimit; generic, framework-free, validated at construction. The header name is part of the identity so different headers in one chain never collide |
+| DRF throttles: `UniLimitAnon/User/ScopedRateThrottle` keep DRF's names, `scope`, `throttle_scope` and `DEFAULT_THROTTLE_RATES`; `UniLimitRateThrottle` and `UniLimitThrottle` are the extension points | Migration is a class swap. Counters are named `drf:<scope>` |
+| DRF rates parse like DRF (first letter of the period), then the UniLimit grammar; `manage.py check` warns about `"1/month"` | Migrated settings keep their behaviour; the surprise is surfaced, not silently fixed |
+| All UniLimit throttles of a view are one batch; the first to run evaluates for the group | A rejection by one throttle must not consume the others (invariant 1) |
+| A UniLimit throttle and a DRF built-in on the same scope raise `ImproperlyConfigured`; `manage.py check` reports `unilimit.E002` | The M5 brief forbids double counting through both libraries |
+| Denied and missing-identity decisions raise `PermissionDenied`; Redis down with `fail_mode="closed"` raises `ServiceUnavailable` (503) | DRF's own exception handling renders them |
+| Client IPs come from `Limiter(trusted_proxies=...)`; DRF's `NUM_PROXIES` is ignored | One trust model (invariant 5 and the M2 identity rules) |
+| `with_lifespan(app)` closes Redis clients on ASGI shutdown; nothing for WSGI | Django's ASGI handler ignores lifespan; WSGI has no shutdown protocol |
+| The Django and DRF test apps exempt `/`; the FastAPI worker test app does too | Local tooling (`node` port scanners) probes `/` on listening ports and spent the global budget, flaking exact-count tests (lessons.md) |
+| Not done in M5: `query:`/`post:` keys, in-memory fallback, temporary bans, new algorithms | Out of scope; callables cover custom keys |
