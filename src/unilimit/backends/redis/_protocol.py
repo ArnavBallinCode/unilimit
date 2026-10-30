@@ -66,14 +66,16 @@ def script_args(ops: Sequence[ConsumeOp], mode: str, now_us: int | None) -> list
     args = [mode, "" if now_us is None else str(now_us)]
     for op in ops:
         spec = op.spec
-        args.extend((
-            spec.algorithm.code,
-            str(spec.limit),
-            str(spec.window_us),
-            str(spec.capacity),
-            str(op.cost),
-            "1" if op.enforce else "0",
-        ))
+        args.extend(
+            (
+                spec.algorithm.code,
+                str(spec.limit),
+                str(spec.window_us),
+                str(spec.capacity),
+                str(op.cost),
+                "1" if op.enforce else "0",
+            )
+        )
     return args
 
 
