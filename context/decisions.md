@@ -130,4 +130,12 @@ decision needs the maintainer's agreement and a new entry here.
 | Explicit custom backend contracts (`SyncBackend`, `AsyncBackend`, `LeaseBackend`, `AsyncLeaseBackend`) | Clear extension protocol for third-party storage backends (internal key-value caches, databases) |
 | Reusable backend conformance harness in `unilimit.testing` | `verify_backend_conformance` and `verify_async_backend_conformance` validate any backend implementation against atomicity, all algorithms, and lease semantics |
 
+## M9
+
+| Decision | Rationale |
+|---|---|
+| Dedicated security audit suite (`tests/unit/test_security_audit.py`) | Tests IP spoofing resistance, proxy traversal halts, parameter injections, length caps, and event redactions |
+| Production security guide (`docs/security.md`) and audit report (`context/security-audit.md`) | Documents defense-in-depth, fail-open vs fail-closed strategies, secret salts, and residual risks for operators |
+
+
 
