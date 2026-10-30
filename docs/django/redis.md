@@ -5,7 +5,7 @@
 ```python
 # settings.py
 UNILIMIT = {
-    "URL": "redis://localhost:6379/0",  # rediss:// for TLS, unix:///path/to/redis.sock
+    "URL": "redis://localhost:6379/0",  # rediss:// for TLS, unix://, or sentinel://...
     # Passed to Limiter.from_url:
     "OPTIONS": {
         "namespace": "shop",  # key prefix: isolates applications sharing a Redis
@@ -22,7 +22,13 @@ UNILIMIT = {
 Use `"LIMITER": limiter` (or a dotted path such as `"myproject.ratelimits.limiter"`)
 instead of `URL` when you build the `Limiter` yourself, for instance to register rules,
 set `trusted_proxies` or use `cluster=True`. Exactly one of `LIMITER` and `URL` is
-required. For **Redis Cluster** pass `"cluster": True` in `OPTIONS`.
+required.
+
+- **Redis Cluster:** pass `"cluster": True` in `OPTIONS`.
+- **Redis Sentinel:** use a `sentinel://host1:26379,host2:26379/service_name/0` URL, or
+  instantiate `RedisBackend.from_sentinel(...)` and pass `Limiter(backend)`.
+- **TLS / SSL:** use `rediss://...` or supply `ssl_cert_reqs`, `ssl_ca_certs`, etc. in
+  `OPTIONS["client_options"]`.
 
 Everything is loaded on first use and cached; `override_settings(UNILIMIT=...)` in tests
 rebuilds it.

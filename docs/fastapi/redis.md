@@ -9,7 +9,7 @@ from unilimit import Limiter, Rule
 from unilimit.integrations.fastapi import RateLimit, setup
 
 limiter = Limiter.from_url(
-    "redis://localhost:6379/0",  # rediss:// for TLS, unix:///path/to/redis.sock
+    "redis://localhost:6379/0",  # rediss:// for TLS, unix:///path/to/redis.sock, or sentinel://...
     namespace="shop",  # key prefix: isolates applications sharing a Redis
     global_rules=[Rule("site", "300/minute")],
     # Backend options (defaults shown):
@@ -36,6 +36,14 @@ never makes a blocking Redis call on an async request path.
 
 For **Redis Cluster**, pass `cluster=True`. Keys are hash-tagged by identity, so all
 of one identity's counters live in the same slot.
+
+For **Redis Sentinel**, pass a `sentinel://` URL or construct a backend with
+`RedisBackend.from_sentinel(...)`:
+- URL format: `sentinel://sentinel1:26379,sentinel2:26379/service_name/0`
+- Factory: `RedisBackend.from_sentinel(sentinels=[("sentinel1", 26379), ("sentinel2", 26379)], service_name="mymaster")`
+
+For **TLS / SSL**, use the `rediss://` URL scheme or pass SSL options (such as
+`ssl_cert_reqs`, `ssl_ca_certs`, `ssl_certfile`, `ssl_keyfile`) in `client_options`.
 
 ## Startup and shutdown
 

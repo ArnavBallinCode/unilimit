@@ -58,6 +58,9 @@ from unilimit.observability import (
 
 _REDIS_OPTIONS = (
     "cluster",
+    "sentinels",
+    "service_name",
+    "sentinel_kwargs",
     "socket_timeout",
     "socket_connect_timeout",
     "max_connections",
@@ -180,7 +183,7 @@ class Limiter:
             if redis_only:
                 raise ConfigurationError(f"options {redis_only} do not apply to memory://")
             return cls(MemoryBackend(**memory_kwargs), **kwargs)
-        if scheme in {"redis", "rediss", "unix"}:
+        if scheme in {"redis", "rediss", "unix", "sentinel", "redis+sentinel"}:
             try:
                 from unilimit.backends.redis import RedisBackend
             except ImportError as exc:
