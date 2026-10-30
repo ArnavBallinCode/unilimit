@@ -121,3 +121,13 @@ decision needs the maintainer's agreement and a new entry here.
 | `WebSocketRateLimit.consume` supports weighted message budgets (`cost: int = 1`), with `gate(..., on_exceeded=...)` policies | Enables payload-size / complexity budgets and flexible responses (drop, reply error frame, close, raise) |
 | Pure Starlette integration exported under `unilimit.integrations.starlette` | Re-exports ASGI middleware and WebSocket limiters without requiring FastAPI |
 
+## M8
+
+| Decision | Rationale |
+|---|---|
+| Redis Sentinel via `sentinel://host1:port1,host2:port2/service_name/db` and `RedisBackend.from_sentinel(...)` | Standard Redis HA topology support without breaking sans-I/O policy or changing core semantics |
+| Sync and async Sentinel pooling via `redis.sentinel.Sentinel` and `redis.asyncio.sentinel.Sentinel` | Redis client libraries manage Sentinel discovery, connection pooling, and master failover natively |
+| Explicit custom backend contracts (`SyncBackend`, `AsyncBackend`, `LeaseBackend`, `AsyncLeaseBackend`) | Clear extension protocol for third-party storage backends (internal key-value caches, databases) |
+| Reusable backend conformance harness in `unilimit.testing` | `verify_backend_conformance` and `verify_async_backend_conformance` validate any backend implementation against atomicity, all algorithms, and lease semantics |
+
+

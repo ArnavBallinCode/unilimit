@@ -15,12 +15,15 @@ from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 import redis
 import redis.asyncio
 import redis.asyncio.cluster
 import redis.asyncio.retry
+import redis.asyncio.sentinel
 import redis.cluster
+import redis.sentinel
 from redis import exceptions as rex
 from redis.backoff import NoBackoff
 from redis.retry import Retry
@@ -73,6 +76,75 @@ class _AsyncEntry:
     ready: bool = False
 
 
+def _parse_sentinel_url(
+    url: str,
+) -> tuple[tuple[tuple[str, int], ...], str, dict[str, Any]]:
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("redis+sentinel", "sentinel"):
+        raise ConfigurationError(f"unsupported sentinel scheme: {parsed.scheme!r}")
+
+    netloc = parsed.netloc
+    options: dict[str, Any] = {}
+
+    if "@" in netloc:
+        userinfo, _, netloc = netloc.rpartition("@")
+        if ":" in userinfo:
+            username, _, password = userinfo.partition(":")
+            if username:
+                options["username"] = unquote(username)
+            if password:
+                options["password"] = unquote(password)
+        elif userinfo:
+            options["password"] = unquote(userinfo)
+
+    host_strs = netloc.split(",")
+    sentinels: list[tuple[str, int]] = []
+    for h in host_strs:
+        h = h.strip()
+        if not h:
+            continue
+        if ":" in h:
+            host, _, port_str = h.partition(":")
+            try:
+                port = int(port_str)
+            except ValueError:
+                raise ConfigurationError(f"invalid port in sentinel host: {h!r}") from None
+        else:
+            host = h
+            port = 26379
+        sentinels.append((host, port))
+
+    if not sentinels:
+        raise ConfigurationError("no sentinel hosts found in URL")
+
+    path = parsed.path.strip("/")
+    if not path:
+        raise ConfigurationError(
+            "sentinel URL must include a service name in the path "
+            "(e.g. redis+sentinel://localhost:26379/mymaster)"
+        )
+    segments = path.split("/")
+    service_name = segments[0]
+    if len(segments) > 1 and segments[1]:
+        try:
+            options["db"] = int(segments[1])
+        except ValueError:
+            raise ConfigurationError(f"invalid db in sentinel URL path: {segments[1]!r}") from None
+
+    if parsed.query:
+        for k, v in parse_qsl(parsed.query):
+            if k == "db":
+                options["db"] = int(v)
+            elif k == "password":
+                options["password"] = v
+            elif k in ("socket_timeout", "socket_connect_timeout", "pool_timeout", "cooldown"):
+                options[k] = float(v)
+            else:
+                options[k] = v
+
+    return tuple(sentinels), service_name, options
+
+
 class RedisBackend:
     """Distributed rate-limit storage on Redis (standalone, Sentinel or Cluster).
 
@@ -107,6 +179,9 @@ class RedisBackend:
         client: Any = None,
         async_client: Any = None,
         cluster: bool | None = None,
+        sentinels: Sequence[tuple[str, int]] | None = None,
+        service_name: str | None = None,
+        sentinel_kwargs: Mapping[str, Any] | None = None,
         socket_timeout: float | None = 0.5,
         socket_connect_timeout: float | None = 1.0,
         max_connections: int = 32,
@@ -115,10 +190,27 @@ class RedisBackend:
         clock: Clock | None = None,
         client_options: Mapping[str, Any] | None = None,
     ) -> None:
-        if url is None and client is None and async_client is None:
-            raise ConfigurationError("RedisBackend needs a url, a client or an async_client")
-        if url is not None and (client is not None or async_client is not None):
-            raise ConfigurationError("pass either a url or explicit clients, not both")
+        if url is not None and url.startswith(("sentinel://", "redis+sentinel://")):
+            parsed_sentinels, parsed_service, parsed_opts = _parse_sentinel_url(url)
+            sentinels = parsed_sentinels
+            service_name = parsed_service
+            client_options = {**parsed_opts, **(client_options or {})}
+            url = None
+
+        if url is None and client is None and async_client is None and sentinels is None:
+            raise ConfigurationError(
+                "RedisBackend needs a url, a client, an async_client, or sentinels"
+            )
+        if (url is not None or sentinels is not None) and (
+            client is not None or async_client is not None
+        ):
+            raise ConfigurationError("pass either a url/sentinels or explicit clients, not both")
+        if sentinels is not None:
+            if not service_name:
+                raise ConfigurationError("service_name is required when configuring Sentinel")
+            if cluster:
+                raise ConfigurationError("cluster=True cannot be used with Sentinel")
+
         for name, value in (("cooldown", cooldown), ("pool_timeout", pool_timeout)):
             if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
                 raise ConfigurationError(f"{name} must be a non-negative number of seconds")
@@ -138,6 +230,11 @@ class RedisBackend:
             raise ConfigurationError("cluster= does not match the supplied client type")
 
         self._url = url
+        self._sentinels: tuple[tuple[str, int], ...] | None = (
+            tuple(sentinels) if sentinels is not None else None
+        )
+        self._service_name = service_name
+        self._sentinel_kwargs = dict(sentinel_kwargs or {})
         self._cluster = bool(cluster)
         self._options: dict[str, Any] = {
             "socket_timeout": socket_timeout,
@@ -179,12 +276,38 @@ class RedisBackend:
     def from_url(cls, url: str, **kwargs: Any) -> RedisBackend:
         return cls(url, **kwargs)
 
+    @classmethod
+    def from_sentinel(
+        cls,
+        sentinels: Sequence[tuple[str, int]],
+        service_name: str,
+        *,
+        sentinel_kwargs: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> RedisBackend:
+        return cls(
+            sentinels=sentinels,
+            service_name=service_name,
+            sentinel_kwargs=sentinel_kwargs,
+            **kwargs,
+        )
+
     @property
     def cluster(self) -> bool:
         return self._cluster
 
     @property
+    def sentinels(self) -> tuple[tuple[str, int], ...] | None:
+        return self._sentinels
+
+    @property
+    def service_name(self) -> str | None:
+        return self._service_name
+
+    @property
     def name(self) -> str:
+        if self._sentinels is not None:
+            return "redis-sentinel"
         return "redis-cluster" if self._cluster else "redis"
 
     def attach_emitter(self, emitter: Emitter) -> None:
@@ -208,21 +331,41 @@ class RedisBackend:
 
     def _sync(self) -> tuple[Any, Any]:
         if self._client is None:
-            if self._url is None:
-                raise ConfigurationError("no sync client: construct RedisBackend with client=")
-            with self._lock:
-                if self._client is None:
-                    retry = Retry(NoBackoff(), 1, supported_errors=(rex.ConnectionError,))
-                    if self._cluster:
-                        client: Any = redis.cluster.RedisCluster.from_url(
-                            self._url, retry=retry, **self._options
+            if self._sentinels is not None:
+                assert self._service_name is not None
+                with self._lock:
+                    if self._client is None:
+                        sentinel_cls: Any = redis.sentinel.Sentinel
+                        sentinel: Any = sentinel_cls(
+                            self._sentinels,
+                            sentinel_kwargs=self._sentinel_kwargs,
+                            socket_timeout=self._options.get("socket_timeout"),
+                            socket_connect_timeout=self._options.get("socket_connect_timeout"),
                         )
-                    else:
-                        client = redis.Redis.from_url(self._url, retry=retry, **self._options)
-                    self._script = client.register_script(SCRIPT)
-                    self._lease_script = client.register_script(LEASE_SCRIPT)
-                    self._client = client
-                    self._owns_client = True
+                        retry = Retry(NoBackoff(), 1, supported_errors=(rex.ConnectionError,))
+                        client: Any = sentinel.master_for(
+                            self._service_name, retry=retry, **self._options
+                        )
+                        self._script = client.register_script(SCRIPT)
+                        self._lease_script = client.register_script(LEASE_SCRIPT)
+                        self._client = client
+                        self._owns_client = True
+            elif self._url is None:
+                raise ConfigurationError("no sync client: construct RedisBackend with client=")
+            else:
+                with self._lock:
+                    if self._client is None:
+                        retry = Retry(NoBackoff(), 1, supported_errors=(rex.ConnectionError,))
+                        if self._cluster:
+                            client = redis.cluster.RedisCluster.from_url(
+                                self._url, retry=retry, **self._options
+                            )
+                        else:
+                            client = redis.Redis.from_url(self._url, retry=retry, **self._options)
+                        self._script = client.register_script(SCRIPT)
+                        self._lease_script = client.register_script(LEASE_SCRIPT)
+                        self._client = client
+                        self._owns_client = True
         return self._client, self._script
 
     def _async_entry(self) -> _AsyncEntry:
@@ -243,6 +386,27 @@ class RedisBackend:
                 False,
                 asyncio.Lock(),
             )
+        elif self._sentinels is not None:
+            assert self._service_name is not None
+            async_sentinel_cls: Any = redis.asyncio.sentinel.Sentinel
+            sentinel = async_sentinel_cls(
+                self._sentinels,
+                sentinel_kwargs=self._sentinel_kwargs,
+                socket_timeout=self._options.get("socket_timeout"),
+                socket_connect_timeout=self._options.get("socket_connect_timeout"),
+            )
+            retry = redis.asyncio.retry.Retry(
+                NoBackoff(), 1, supported_errors=(rex.ConnectionError,)
+            )
+            client: Any = sentinel.master_for(self._service_name, retry=retry, **self._options)
+            entry = _AsyncEntry(
+                client,
+                client.register_script(SCRIPT),
+                client.register_script(LEASE_SCRIPT),
+                gate,
+                True,
+                asyncio.Lock(),
+            )
         elif self._url is None:
             raise ConfigurationError("no async client: construct RedisBackend with async_client=")
         else:
@@ -250,7 +414,7 @@ class RedisBackend:
                 NoBackoff(), 1, supported_errors=(rex.ConnectionError,)
             )
             if self._cluster:
-                client: Any = redis.asyncio.cluster.RedisCluster.from_url(
+                client = redis.asyncio.cluster.RedisCluster.from_url(
                     self._url, retry=retry, **self._options
                 )
             else:
