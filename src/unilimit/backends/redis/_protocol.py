@@ -19,10 +19,13 @@ from unilimit.core.keys import key_hash_slot
 
 SCRIPT = files(__package__).joinpath("batch.lua").read_text(encoding="utf-8")
 
-_FIELDS = 6  # allowed, remaining, reset_after, retry_after, ttl, written state
+_FIELDS_COMPACT = 4  # allowed, remaining, reset_after, retry_after
+_FIELDS_DETAILED = 6  # + ttl, written state
 
 MODE_CONSUME = "c"
 MODE_PEEK = "p"
+MODE_DIFF_CONSUME = "cd"
+MODE_DIFF_PEEK = "pd"
 
 _BY_CODE = {a.code: a for a in Algorithm}
 
@@ -47,10 +50,12 @@ def decode_state(raw: str | bytes) -> tuple[Algorithm, State]:
 
 def script_args(ops: Sequence[ConsumeOp], mode: str, now_us: int | None) -> list[str]:
     """``now_us=None`` makes the script read the Redis server clock."""
-    args = [mode, "" if now_us is None else str(now_us)]
-    for op in ops:
+    if len(ops) == 1:
+        op = ops[0]
         spec = op.spec
-        args += [
+        return [
+            mode,
+            "" if now_us is None else str(now_us),
             spec.algorithm.code,
             str(spec.limit),
             str(spec.window_us),
@@ -58,6 +63,19 @@ def script_args(ops: Sequence[ConsumeOp], mode: str, now_us: int | None) -> list
             str(op.cost),
             "1" if op.enforce else "0",
         ]
+    args = [mode, "" if now_us is None else str(now_us)]
+    for op in ops:
+        spec = op.spec
+        args.extend(
+            (
+                spec.algorithm.code,
+                str(spec.limit),
+                str(spec.window_us),
+                str(spec.capacity),
+                str(op.cost),
+                "1" if op.enforce else "0",
+            )
+        )
     return args
 
 
@@ -89,20 +107,70 @@ def parse_reply(reply: Sequence[Any], ops: Sequence[ConsumeOp]) -> ScriptReply:
             f"unreadable rate-limit state at key {key!r}; it was not written by UniLimit "
             "or is corrupted. Delete the key (Limiter.reset) to recover."
         )
-    if len(reply) != 2 + _FIELDS * len(ops):
-        raise BackendError("unexpected reply shape from the UniLimit script")
-    results = []
-    ttls = []
-    written: list[str | None] = []
-    for i in range(len(ops)):
-        base = 2 + _FIELDS * i
-        allowed, remaining, reset, retry, ttl = (int(v) for v in reply[base : base + 5])
-        results.append(OpResult(allowed == 1, remaining, reset, None if retry < 0 else retry))
-        ttls.append(ttl)
-        written.append(_text(reply[base + 5]) or None)
-    return ScriptReply(
-        int(reply[0]) == 1, int(reply[1]), tuple(results), tuple(ttls), tuple(written)
-    )
+    num_ops = len(ops)
+    reply_len = len(reply)
+    if reply_len == 2 + _FIELDS_COMPACT * num_ops:
+        if num_ops == 1:
+            allowed = int(reply[2])
+            remaining = int(reply[3])
+            reset = int(reply[4])
+            retry = int(reply[5])
+            return ScriptReply(
+                int(reply[0]) == 1,
+                int(reply[1]),
+                (OpResult(allowed == 1, remaining, reset, None if retry < 0 else retry),),
+                (0,),
+                (None,),
+            )
+        results = []
+        for i in range(num_ops):
+            base = 2 + _FIELDS_COMPACT * i
+            allowed = int(reply[base])
+            remaining = int(reply[base + 1])
+            reset = int(reply[base + 2])
+            retry = int(reply[base + 3])
+            results.append(OpResult(allowed == 1, remaining, reset, None if retry < 0 else retry))
+        return ScriptReply(
+            int(reply[0]) == 1,
+            int(reply[1]),
+            tuple(results),
+            (0,) * num_ops,
+            (None,) * num_ops,
+        )
+    if reply_len == 2 + _FIELDS_DETAILED * num_ops:
+        if num_ops == 1:
+            allowed = int(reply[2])
+            remaining = int(reply[3])
+            reset = int(reply[4])
+            retry = int(reply[5])
+            ttl = int(reply[6])
+            raw_written = reply[7]
+            written = (_text(raw_written) or None) if raw_written else None
+            return ScriptReply(
+                int(reply[0]) == 1,
+                int(reply[1]),
+                (OpResult(allowed == 1, remaining, reset, None if retry < 0 else retry),),
+                (ttl,),
+                (written,),
+            )
+        results = []
+        ttls = []
+        written_list: list[str | None] = []
+        for i in range(num_ops):
+            base = 2 + _FIELDS_DETAILED * i
+            allowed = int(reply[base])
+            remaining = int(reply[base + 1])
+            reset = int(reply[base + 2])
+            retry = int(reply[base + 3])
+            ttl = int(reply[base + 4])
+            raw_w = reply[base + 5]
+            results.append(OpResult(allowed == 1, remaining, reset, None if retry < 0 else retry))
+            ttls.append(ttl)
+            written_list.append((_text(raw_w) or None) if raw_w else None)
+        return ScriptReply(
+            int(reply[0]) == 1, int(reply[1]), tuple(results), tuple(ttls), tuple(written_list)
+        )
+    raise BackendError("unexpected reply shape from the UniLimit script")
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,8 +192,11 @@ def plan_groups(ops: Sequence[ConsumeOp], cluster: bool) -> list[Group]:
 
     Groups keep first-appearance order, so the plan is deterministic.
     """
+    n = len(ops)
+    if n == 1:
+        return [Group((0,), ops[0].enforce)]
     if not cluster:
-        return [Group(tuple(range(len(ops))), any(op.enforce for op in ops))]
+        return [Group(tuple(range(n)), any(op.enforce for op in ops))]
     by_slot: dict[int, list[int]] = {}
     for i, op in enumerate(ops):
         by_slot.setdefault(key_hash_slot(op.key), []).append(i)

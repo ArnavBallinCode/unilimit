@@ -235,7 +235,10 @@ class Limiter:
     def key_for(self, rule: Rule | str, identity: str | Identity) -> str:
         """The storage key for ``rule`` and ``identity`` (useful for operations tooling)."""
         r = self._lookup(rule)
-        ident = Identity.of(identity)
+        return self._key_for_rule(r, identity)
+
+    def _key_for_rule(self, r: Rule, identity: str | Identity) -> str:
+        ident = identity if isinstance(identity, Identity) else Identity.of(identity)
         digest = identity_digest(ident.kind, ident.value, self._config.identity_secret)
         return rate_limit_key(self._config.namespace, r.name, r.algorithm, digest)
 
@@ -243,7 +246,7 @@ class Limiter:
         self, rule: Rule | str, identity: str | Identity, cost: int
     ) -> tuple[Rule, ConsumeOp]:
         r = self._lookup(rule)
-        return r, ConsumeOp(self.key_for(r, identity), r.spec, cost, enforce=True)
+        return r, ConsumeOp(self._key_for_rule(r, identity), r.spec, cost, enforce=True)
 
     # -- observability, failure handling and fallback ----------------------------------
 

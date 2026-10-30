@@ -265,7 +265,9 @@ class RedisBackend:
 
     @contextmanager
     def _slot(self) -> Iterator[None]:
-        if not self._gate.acquire(timeout=self._pool_timeout):
+        if not self._gate.acquire(blocking=False) and not self._gate.acquire(
+            timeout=self._pool_timeout
+        ):
             raise self._overloaded()
         try:
             yield
@@ -274,11 +276,14 @@ class RedisBackend:
 
     @asynccontextmanager
     async def _aslot(self, gate: asyncio.Semaphore) -> AsyncIterator[None]:
-        try:
-            async with asyncio.timeout(self._pool_timeout):
-                await gate.acquire()
-        except TimeoutError:
-            raise self._overloaded() from None
+        if not gate.locked():
+            await gate.acquire()
+        else:
+            try:
+                async with asyncio.timeout(self._pool_timeout):
+                    await gate.acquire()
+            except TimeoutError:
+                raise self._overloaded() from None
         try:
             yield
         finally:
@@ -386,9 +391,21 @@ class RedisBackend:
            ``committed=False, partial_commit=True``. A request is never admitted
            unless every group committed.
         """
-        check_unique_keys(ops)
         if not ops:
             return BatchResult(True, ())
+        if len(ops) == 1:
+            op = ops[0]
+            with self._errors():
+                client, script = self._sync()
+                with self._slot():
+                    reply = script(
+                        keys=[op.key],
+                        args=script_args(ops, MODE_CONSUME, self._now()),
+                        client=client,
+                    )
+                parsed = parse_reply(reply, ops)
+                return BatchResult(parsed.committed, parsed.results)
+        check_unique_keys(ops)
         groups = plan_groups(ops, self._cluster)
         with self._errors() as progress:
             client, script = self._sync()
@@ -411,9 +428,20 @@ class RedisBackend:
             return BatchResult(True, finished(results))
 
     def peek(self, ops: Sequence[ConsumeOp]) -> tuple[OpResult, ...]:
-        check_unique_keys(ops)
         if not ops:
             return ()
+        if len(ops) == 1:
+            op = ops[0]
+            with self._errors():
+                client, script = self._sync()
+                with self._slot():
+                    reply = script(
+                        keys=[op.key],
+                        args=script_args(ops, MODE_PEEK, self._now()),
+                        client=client,
+                    )
+                return parse_reply(reply, ops).results
+        check_unique_keys(ops)
         with self._errors():
             client, script = self._sync()
             now = self._now()
@@ -469,9 +497,21 @@ class RedisBackend:
 
     async def aconsume(self, ops: Sequence[ConsumeOp]) -> BatchResult:
         """Async twin of :meth:`consume` with identical semantics."""
-        check_unique_keys(ops)
         if not ops:
             return BatchResult(True, ())
+        if len(ops) == 1:
+            op = ops[0]
+            with self._errors():
+                entry = await self._ready_entry()
+                async with self._aslot(entry.gate):
+                    reply = await entry.script(
+                        keys=[op.key],
+                        args=script_args(ops, MODE_CONSUME, self._now()),
+                        client=entry.client,
+                    )
+                parsed = parse_reply(reply, ops)
+                return BatchResult(parsed.committed, parsed.results)
+        check_unique_keys(ops)
         groups = plan_groups(ops, self._cluster)
         with self._errors() as progress:
             entry = await self._ready_entry()
@@ -496,9 +536,20 @@ class RedisBackend:
             return BatchResult(True, finished(results))
 
     async def apeek(self, ops: Sequence[ConsumeOp]) -> tuple[OpResult, ...]:
-        check_unique_keys(ops)
         if not ops:
             return ()
+        if len(ops) == 1:
+            op = ops[0]
+            with self._errors():
+                entry = await self._ready_entry()
+                async with self._aslot(entry.gate):
+                    reply = await entry.script(
+                        keys=[op.key],
+                        args=script_args(ops, MODE_PEEK, self._now()),
+                        client=entry.client,
+                    )
+                return parse_reply(reply, ops).results
+        check_unique_keys(ops)
         with self._errors():
             entry = await self._ready_entry()
             now = self._now()

@@ -74,6 +74,8 @@ def _to_result(evaluation: Evaluation) -> OpResult:
 
 
 def check_unique_keys(ops: Sequence[ConsumeOp]) -> None:
+    if len(ops) <= 1:
+        return
     seen: set[str] = set()
     for op in ops:
         if op.key in seen:
