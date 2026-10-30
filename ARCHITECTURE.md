@@ -1,6 +1,6 @@
 # UniLimit — Architecture
 
-Status: **Approved at the Milestone 1 review, with revisions (R1–R5 below).** Milestone 2 implements the core, the algorithms and the memory backend. Redis and the framework integrations are not implemented yet.
+Status: **Approved at the Milestone 1 review, with revisions (R1–R5 below). Milestone 2 is complete:** the core, the three algorithms, the memory backend and the sync/async APIs are implemented and tested. Redis (M3) and the framework integrations (M4, M5) are not implemented yet.
 
 Companion document: [API_DESIGN.md](API_DESIGN.md).
 
@@ -167,8 +167,8 @@ The rule name together with the algorithm identifies a counter. **Changing a rul
 
 ### 6.1 Deterministic pipeline
 
-1. **Exemptions.** `exempt_paths`, the `exempt(ctx)` predicate and the allowlist. A match returns `EXEMPT`, with no backend I/O.
-2. **Denylist.** A match returns `DENIED` (403 by default), with no backend I/O.
+1. **Exemptions.** `exempt_paths` and the `exempt(ctx)` predicate. A match returns `EXEMPT`, with no backend I/O.
+2. **Access lists.** The denylist is checked first, so **deny beats allow**: a match returns `DENIED` (403 by default). An allowlist match then returns `EXEMPT`. Neither performs backend I/O.
 3. **Selection.** Global rules first, then route rules, each in declaration order. A rule applies if its `methods`, `paths` and `when(ctx)` all match.
 4. **Identity resolution.** The rule's key sources are tried in order (a fallback chain). If none resolves, `on_missing` applies:
    - `deny` (default) → `MISSING_IDENTITY`, nothing consumed;
@@ -262,6 +262,7 @@ The Python modules are the **reference model**. `MemoryBackend` executes them di
 
 - **State:** `(tokens, last_us)`. Refill rate `r = limit/W` tokens per µs; capacity `burst` (default `limit`).
 - **Refill:** `tokens = min(burst, tokens + (now − last)·r)`.
+- **Snap:** after refill, `tokens ≥ burst − EPS` becomes exactly `burst`. A bucket that has refilled for `reset_after` is therefore bit-for-bit equal to a fresh one, so expiring the key at its TTL never changes a later decision (found by deep fuzzing in M2).
 - **Rule:** admit if `tokens + EPS ≥ cost`.
 - **Reported values:**
   - `remaining = ⌊tokens + EPS⌋`;
@@ -344,6 +345,7 @@ The M1 document wrote `{ns}:…:{rule}`, which looks like literal braces and wou
 - The async methods run the same code. The critical section is CPU-only and never contains an `await`, so it is safe for the event loop.
 - Expiry is lazy, plus an amortised sweep. A `max_keys` cap (default 100 000) evicts in least-recently-used order to bound memory. Evicting a live key resets that identity's counter, which is documented.
 - **Per-process only.** N workers mean N independent limits.
+- The algorithm is stored next to each state. Reading state with a different algorithm raises `BackendError` instead of misinterpreting it; the Redis script will do the same. Normal keys cannot hit this, because the algorithm code is part of the key.
 
 ### 9.5 Redis backend [M3]
 
@@ -360,7 +362,7 @@ The M1 document wrote `{ns}:…:{rule}`, which looks like literal braces and wou
 | Error | Behaviour |
 |---|---|
 | `BackendUnavailable` (connection, timeout, cooldown) | The `fail_mode` of the rules in the batch decides:<br>• If any **enforcing** rule is `closed`, the request is rejected with reason `BACKEND_UNAVAILABLE` (HTTP 503 by default in M6).<br>• Otherwise the request is allowed with `degraded=True`.<br>Logged at WARNING. |
-| Any other backend exception | Propagates (wrapped as `BackendError` by the Redis backend). Never swallowed, never subject to fail-open. |
+| Any other backend exception, including state written by a different algorithm | Propagates (`BackendError`, or the original exception). Never swallowed, never subject to fail-open. |
 | Bad configuration | `ConfigurationError` at construction time where possible; conflicting rules are detected at evaluation time. |
 | `on_missing="raise"` | `IdentityError` |
 

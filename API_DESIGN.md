@@ -62,8 +62,8 @@ limiter = Limiter(
     identity_secret=None,  # str | bytes; keyed hashing of identities (recommended)
     api_key_header="X-API-Key",
     tenant_header=None,
-    allow=None,
-    deny=None,  # AccessList(networks=[...], users=[...], api_keys=[...])
+    allow=None,  # AccessList(networks=[...], users=[...], api_keys=[...])
+    deny=None,  # AccessList(...); checked before `allow`, so deny wins
     exempt_paths=(),  # e.g. ("/health", "/metrics/*")
     exempt=None,  # Callable[[RequestContext], bool]
     response=ResponseConfig(),  # §4  [M6]
