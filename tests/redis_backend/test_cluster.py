@@ -291,7 +291,7 @@ async def test_primary_crash_and_failover(
         # one it returns at once), so write a marker into the same slot, then WAIT: the
         # replication stream is ordered, so the replica has the earlier consume as well.
         hash_tag = key[key.index("{") : key.index("}") + 1]
-        with victim.client() as primary:
+        with victim.client(socket_timeout=10.0) as primary:
             primary.set(f"{hash_tag}replicated", 1)
             assert primary.wait(1, 5000) >= 1, "the write did not replicate"
         victim.stop()  # crash the primary that owns this identity's slot

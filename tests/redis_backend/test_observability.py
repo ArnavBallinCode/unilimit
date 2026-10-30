@@ -221,7 +221,7 @@ def test_cluster_primary_crash_is_observable(disposable_cluster: RedisCluster) -
         key = limiter.key_for(PER_USER, Identity("user", "x"))
         slot_owner = disposable_cluster.node_for_slot(key_hash_slot(key))
         hash_tag = key[key.index("{") : key.index("}") + 1]
-        with slot_owner.client() as primary:
+        with slot_owner.client(socket_timeout=10.0) as primary:
             primary.set(f"{hash_tag}replicated", 1)
             assert primary.wait(1, 5000) >= 1, "the write did not replicate"
         slot_owner.stop()
