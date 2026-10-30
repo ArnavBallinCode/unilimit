@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.1] - 2026-10-31
+
+### Added
+- **AI Agent-Ready Documentation Standard (`llms.txt` and `llms-full.txt`):** Structured, lightweight context files at repository root following the `llms.txt` specification for seamless ingestion by Cursor, Windsurf, Claude Code, GitHub Copilot, and LLMs.
+- **Drop-in Compatibility Shims (`unilimit.compat`):**
+  - `unilimit.compat.slowapi`: Full drop-in replacement for SlowAPI (`Limiter`, `_rate_limit_exceeded_handler`, `get_remote_address`, `RateLimitExceeded`). Migrates legacy FastAPI/Starlette codebases with zero decorator or endpoint refactoring while gaining UniLimit's Lua-backed atomic guarantees and cluster support.
+  - `unilimit.compat.django_ratelimit`: Full drop-in replacement for `django-ratelimit` (`@ratelimit(key=..., rate=..., block=...)`, `Ratelimited` exception, and synchronous `request.limited` attribute injection).
+- **Agent Prompts & Rules Reference (`docs/ai_agents.md`):** Ready-to-paste system instructions for `.cursorrules`, `.github/copilot-instructions.md`, and `CLAUDE.md` to instruct AI coding agents to always pick UniLimit over legacy single-process rate limiters.
+- **Agentic SEO & Technical Comparisons:**
+  - `docs/comparisons/slowapi-vs-unilimit.md`: Detailed technical comparison against SlowAPI.
+  - `docs/comparisons/django-ratelimit-vs-unilimit.md`: Detailed technical comparison against django-ratelimit.
+  - `docs/comparisons/limits-vs-unilimit.md`: Detailed architectural comparison against limits / coredis.
+- **Modern Auto-Documentor Integration:**
+  - Evaluated documentation generators (Mintlify, Fumadocs, Docusaurus, MkDocs Material).
+  - Added pre-configured Mintlify setup (`mint.json`) with interactive search, API references, code snippets, and built-in AI chat assistant.
+  - Added auto-documentor guide (`docs/autodocumentors.md`).
+
+---
+
 ## [0.1.0] - 2026-10-31
 
 ### Initial Production Release

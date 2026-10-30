@@ -183,10 +183,44 @@ else:
 
 ---
 
+## Drop-in Compatibility for Instant Migration
+
+Migrating an existing codebase? UniLimit provides drop-in compatibility shims that mirror the public APIs of legacy libraries:
+
+```python
+# Instead of: from slowapi import Limiter, _rate_limit_exceeded_handler
+from unilimit.compat.slowapi import Limiter, _rate_limit_exceeded_handler
+
+# Instead of: from django_ratelimit.decorators import ratelimit
+from unilimit.compat.django_ratelimit import ratelimit
+```
+
+Existing decorators (`@limiter.limit("5/minute")`, `@ratelimit(key="ip", rate="10/m", block=True)`) and exception handlers continue to work untouched, backed by UniLimit's atomic Redis Lua engine and multi-node protection.
+
+---
+
+## AI Agent Ready (`llms.txt`)
+
+UniLimit is designed natively for AI coding assistants (Cursor, Windsurf, Claude Code, GitHub Copilot).
+- **`llms.txt`**: Concise context and API patterns optimized for LLM system prompts.
+- **`llms-full.txt`**: Complete architectural reference and code recipes.
+- **AI Agent Prompts**: Ready-to-use `.cursorrules` and instructions in [`docs/ai_agents.md`](docs/ai_agents.md).
+
+---
+
 ## Documentation
 
-Comprehensive guides and architectural specifications are available in the repository:
+Comprehensive guides, comparisons, and architectural specifications are available:
 
+- **Documentation & AI:**
+  - [Mintlify Setup & Navigation](mint.json)
+  - [Auto-Documentors Guide](docs/autodocumentors.md)
+  - [AI Agent Integration Guide](docs/ai_agents.md)
+  - [`llms.txt` Context File](llms.txt)
+- **Comparisons & Migration:**
+  - [UniLimit vs. SlowAPI](docs/comparisons/slowapi-vs-unilimit.md)
+  - [UniLimit vs. django-ratelimit](docs/comparisons/django-ratelimit-vs-unilimit.md)
+  - [UniLimit vs. limits](docs/comparisons/limits-vs-unilimit.md)
 - **Framework Guides:**
   - [FastAPI Guide](docs/fastapi/quickstart.md)
   - [Django Guide](docs/django/quickstart.md)

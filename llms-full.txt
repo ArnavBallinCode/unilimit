@@ -1,0 +1,174 @@
+# UniLimit: Complete Technical Reference for AI Coding Agents
+
+## 1. Package Architecture & Principles
+
+UniLimit is designed with a strict sans-I/O policy:
+1. **Rule Compilation:** High-level rate specifications (`"10/minute"`, `"5/second"`, `"1000/day"`) and fallback chains (`key="user_or_ip"`) are compiled synchronously into low-level `BatchOp` operations without I/O.
+2. **Storage Execution:** Low-level operations are evaluated atomically by storage backends (`MemoryBackend`, `RedisBackend`).
+3. **Atomic Evaluation (All-or-Nothing):** If an endpoint defines multiple limits (e.g. 5 requests per second burst AND 1,000 requests per day quota), all limits are evaluated together in a single atomic Redis Lua batch. If any limit fails, no limits are incremented. There are no compensating decrements.
+4. **No Blocking I/O on Event Loops:** Redis operations on async paths use `redis.asyncio` only. On WSGI synchronous threads, the sync client is used.
+5. **Privacy by Default:** Storage keys contain keyed HMAC-SHA256 digests (`identity_digest`). Usernames, passwords, tokens, and raw IP addresses are never written to storage keys and are never emitted in logs or observability metrics.
+
+---
+
+## 2. API Reference: Core Symbols
+
+### `unilimit.Rule`
+```python
+Rule(
+    name: str,
+    rate: str | Rate,
+    *,
+    algorithm: Literal["sliding_window", "fixed_window", "token_bucket"] = "sliding_window",
+    key: str | Callable[[RequestContext], str | int | None] | Sequence[...] = "ip",
+    fail_mode: Literal["open", "closed"] | None = None,
+    cost: int = 1,
+)
+```
+
+### `unilimit.Limiter`
+```python
+# Factory constructor (recommended for Redis):
+limiter = Limiter.from_url(
+    url: str,  # "redis://...", "rediss://...", "sentinel://...", "memory://"
+    *,
+    namespace: str = "unilimit",
+    global_rules: Sequence[Rule] = (),
+    fail_mode: Literal["open", "closed"] = "open",
+    trusted_proxies: TrustedProxies | None = None,
+    ipv6_prefix: int = 64,
+    ipv4_prefix: int = 32,
+    secret: bytes | str | None = None,
+    cluster: bool = False,
+    sentinels: Sequence[tuple[str, int]] | None = None,
+    service_name: str | None = None,
+    max_connections: int = 32,
+    socket_timeout: float = 0.5,
+    socket_connect_timeout: float = 1.0,
+    pool_timeout: float = 1.0,
+    cooldown: float = 0.5,
+    fallback: Literal["memory"] | MemoryBackend | None = None,
+    observer: Observer | None = None,
+)
+```
+
+### `unilimit.TrustedProxies`
+Configures reverse proxy trust to safely extract the client IP:
+```python
+trusted = TrustedProxies(
+    networks=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+    header="X-Forwarded-For",  # Or "X-Real-IP" or "Forwarded"
+)
+```
+- Evaluates headers ONLY when the immediate TCP peer is inside `networks`.
+- Walks header entries right-to-left and returns the first untrusted IP.
+- Halts safely on malformed values without crashing or admitting spoofed IPs.
+
+---
+
+## 3. Framework Integrations
+
+### FastAPI Integration (`unilimit.integrations.fastapi`)
+```python
+from fastapi import Depends, FastAPI
+from unilimit import Limiter, Rule
+from unilimit.integrations.fastapi import RateLimit, setup
+
+app = FastAPI()
+limiter = Limiter.from_url("redis://localhost:6379/0")
+setup(app, limiter)
+
+
+# Route rate limiting:
+@app.get("/items", dependencies=[Depends(RateLimit("items", rate="60/minute", key="ip"))])
+async def list_items():
+    return []
+```
+
+### WebSocket Concurrency & Message Rate Limiting
+```python
+from fastapi import FastAPI, WebSocket
+from unilimit import Limiter
+from unilimit.integrations.fastapi import WebSocketConnectionLimit, WebSocketRateLimit
+
+app = FastAPI()
+limiter = Limiter.from_url("redis://localhost:6379/0")
+
+concurrency = WebSocketConnectionLimit(limiter, max_connections=5, key="ip")
+msg_limit = WebSocketRateLimit(limiter, rate="30/minute")
+
+
+@app.websocket("/stream")
+async def stream(ws: WebSocket):
+    async with concurrency.connection(ws):
+        await ws.accept()
+        while True:
+            data = await ws.receive_text()
+            if not await msg_limit.consume(ws, cost=1):
+                await ws.send_text('{"error": "rate_limited"}')
+                continue
+            await ws.send_text(f"ack: {data}")
+```
+
+### Django Integration (`unilimit.integrations.django`)
+In `settings.py`:
+```python
+INSTALLED_APPS = [..., "unilimit.integrations.django"]
+MIDDLEWARE = [..., "unilimit.integrations.django.UniLimitMiddleware"]
+UNILIMIT = {
+    "URL": "redis://localhost:6379/0",
+    "OPTIONS": {"namespace": "shop", "fail_mode": "open"},
+}
+```
+
+In views:
+```python
+from django.http import HttpRequest, HttpResponse
+from unilimit.integrations.django import ratelimit
+
+
+@ratelimit("search", rate="10/minute", key="ip")
+def search(request: HttpRequest) -> HttpResponse:
+    return HttpResponse("ok")
+```
+
+### Django REST Framework Throttling (`unilimit.integrations.drf`)
+Drop-in throttle classes that share the UniLimit Redis core and atomic batches:
+- `UniLimitAnonRateThrottle`: Limits anonymous users by IP.
+- `UniLimitUserRateThrottle`: Limits authenticated users by user ID (falls back to IP if anonymous).
+- `UniLimitScopedRateThrottle`: Uses the view's `throttle_scope` attribute matching DRF's `DEFAULT_THROTTLE_RATES`.
+
+---
+
+## 4. Algorithms Reference
+
+1. **Sliding Window Counter (`sliding_window`, default):**
+   - Blends the previous window and current window count based on time elapsed.
+   - Smooths out boundary burst issues without the high storage overhead of storing every timestamp.
+2. **Fixed Window (`fixed_window`):**
+   - Discrete buckets aligned to the epoch boundary.
+   - Lowest CPU and memory footprint, but allows up to $2 \times$ limit across boundary transitions.
+3. **Token Bucket (`token_bucket`):**
+   - Continuous replenishment at a steady fill rate up to a configured burst capacity.
+   - Ideal for burst-tolerant APIs and streaming throughput.
+
+---
+
+## 5. Storage Key Schema
+
+Storage keys follow this format:
+```text
+{namespace}:{version}:rl:{rule}:{algorithm}:{{identity_digest}}
+```
+- `{namespace}`: Custom application prefix (default `unilimit`).
+- `{version}`: `v1`.
+- `rl`: Rate limit prefix.
+- `{rule}`: Rule name segment (hashed if containing special characters).
+- `{algorithm}`: `sw` (sliding window), `fw` (fixed window), or `tb` (token bucket).
+- `{{identity_digest}}`: Base64url HMAC-SHA256 digest of `(kind, value)`. The surrounding `{...}` ensures Redis Cluster pins all limits for the identity to the same hash slot.
+
+Lease keys follow:
+```text
+{namespace}:{version}:cl:{rule}:{{identity_digest}}
+```
+Stored as a Redis Sorted Set (`ZSET`) where members are unique `lease_id` UUIDs and scores are millisecond expiration timestamps.
