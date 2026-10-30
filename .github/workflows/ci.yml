@@ -130,6 +130,22 @@ jobs:
           uv run $pins python -c "import django, rest_framework; print(django.__version__, rest_framework.VERSION)"
           uv run $pins pytest tests/django_integration tests/unit/test_http.py -ra
 
+  benchmarks-smoke:
+    name: benchmark tooling (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Redis (distribution package)
+        run: sudo apt-get update -q && sudo apt-get install -yq redis-server
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked --group bench
+      - name: Quick run of every suite (checks the harness, not the numbers)
+        run: uv run --group bench python -m benchmarks.run --quick --out /tmp/bench.json
+      - name: The report generator accepts the raw results
+        run: uv run --group bench python -m benchmarks.report /tmp/bench.json > /dev/null
+
   wheel:
     runs-on: ubuntu-latest
     steps:
@@ -241,6 +257,39 @@ jobs:
           from django.conf import settings
           settings.configure(INSTALLED_APPS=['rest_framework'], SECRET_KEY='x')
           import unilimit.integrations.drf
+          "
+      - name: Prometheus and OpenTelemetry extras install independently
+        run: |
+          uv venv /tmp/prom-env
+          uv pip install --python /tmp/prom-env/bin/python "$(ls dist/*.whl)[prometheus]"
+          /tmp/prom-env/bin/python -c "
+          from prometheus_client import CollectorRegistry, generate_latest
+          from unilimit import Limiter, Rule
+          from unilimit.integrations.prometheus import PrometheusObserver
+          reg = CollectorRegistry()
+          lim = Limiter.from_url('memory://', rules=[Rule('api', '1/minute')], observer=PrometheusObserver(reg))
+          lim.consume('api', 'u'); lim.consume('api', 'u')
+          assert 'rate_limited' in generate_latest(reg).decode()
+          try:
+              import opentelemetry
+          except ImportError:
+              pass
+          else:
+              raise SystemExit('the prometheus extra pulled in OpenTelemetry')
+          "
+          uv venv /tmp/otel-env
+          uv pip install --python /tmp/otel-env/bin/python "$(ls dist/*.whl)[otel]"
+          /tmp/otel-env/bin/python -c "
+          from unilimit import Limiter, Rule
+          from unilimit.integrations.otel import OpenTelemetryObserver
+          lim = Limiter.from_url('memory://', rules=[Rule('api', '1/minute')], observer=OpenTelemetryObserver())
+          assert [lim.consume('api', 'u').allowed for _ in range(2)] == [True, False]
+          try:
+              import prometheus_client
+          except ImportError:
+              pass
+          else:
+              raise SystemExit('the otel extra pulled in prometheus-client')
           "
       - name: Redis extra installs and talks to a real server
         run: |

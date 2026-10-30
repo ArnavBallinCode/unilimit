@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-30, after Milestone 5 (Django and DRF)._
+_Last updated: 2026-10-30, M6 implemented locally (CI pending)._
 
 ## Milestones
 
@@ -12,8 +12,8 @@ _Last updated: 2026-10-30, after Milestone 5 (Django and DRF)._
 | M4 | FastAPI integration: middleware, `RateLimit`, headers, lifecycle, docs | Done |
 | — | Prior-art adoptions: `limits` rate grammar, `WebSocketRateLimit`, HTTP-date `Retry-After` | Done |
 | M5 | Django: middleware (sync/async), `@ratelimit`, DRF throttles, `header:` keys, `ipv4_prefix`, docs | **Done**; CI green on `45f4492` |
-| M6 | Observability hooks, log throttling, security/reliability hardening | Planned |
-| M7 | Benchmarks, MkDocs site, packaging, release | Planned |
+| M6 | Observability: events, metrics (Prometheus, OpenTelemetry), throttled failure logs, opt-in local fallback, benchmark tooling and results | **Implemented; CI not yet run** |
+| M7 | MkDocs site, packaging, release; performance work suggested by the M6 benchmarks | Planned |
 
 Milestones start only when the maintainer asks.
 
@@ -61,9 +61,19 @@ mind day to day:
   rejection does not refund global quota.
 - On Redis Cluster, batches spanning several slots are not atomic across slots:
   `partial_commit` (~4–5% of rejections under heavy contention).
-- The limiter logs a warning on every fail-open request; throttling is M6.
-- Planned adoptions from prior art (see `prior-art.md`): `in_memory_fallback`-style
-  degraded mode (M6).
+- Failure logs are throttled per category and **per process** (M6); with N workers expect
+  up to N first-occurrence lines per interval.
+- M6 limits:
+  - Observers run inline on the request path; a slow observer slows requests.
+  - The local fallback is per process: up to N workers × limit during an outage, and its
+    counters are not merged back into Redis on recovery (invariant 13).
+  - Benchmarks (see `docs/observability/benchmarks.md`): UniLimit is **slower than
+    `limits`** at the library level (about 3–5× in memory, 1.5–1.7× on Redis) and its
+    asyncio Redis throughput at 32 in flight (10–17k/s) is about half of `limits`
+    (coredis, 18–36k/s). Not yet investigated: candidates are the keyed digest, the
+    single-rule path through the batch machinery, and the per-call gate/timeout in the
+    async Redis path. One laptop, two runs differing by up to 1.7×: not conclusive.
+  - OpenTelemetry has no spans of its own (see `decisions.md`).
 - Django/DRF limits (M5):
   - `request.user` is not set until DRF authenticates, so `@ratelimit(key="user")` cannot
     see DRF token or JWT users; use the DRF throttles for those.

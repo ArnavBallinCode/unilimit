@@ -1,5 +1,6 @@
 """UniLimit: one rate-limiting core for Django, FastAPI and plain Python."""
 
+from unilimit._logging import configure_logging
 from unilimit._version import __version__
 from unilimit.algorithms import Algorithm
 from unilimit.backends.memory import MemoryBackend
@@ -19,26 +20,45 @@ from unilimit.core.policy import AccessList
 from unilimit.core.rate import Rate
 from unilimit.core.result import Decision, RateLimitResult, Reason
 from unilimit.core.rule import Rule
+from unilimit.metrics import InMemoryMetrics
+from unilimit.observability import (
+    BackendUnavailableEvent,
+    BreakerEvent,
+    DecisionEvent,
+    Event,
+    FallbackEvent,
+    Observer,
+    RuleOutcome,
+)
 
 __all__ = [
     "AccessList",
     "Algorithm",
     "BackendError",
     "BackendUnavailable",
+    "BackendUnavailableEvent",
+    "BreakerEvent",
     "ConfigurationError",
     "Decision",
+    "DecisionEvent",
+    "Event",
+    "FallbackEvent",
     "Identity",
     "IdentityError",
+    "InMemoryMetrics",
     "Limiter",
     "MemoryBackend",
+    "Observer",
     "Rate",
     "RateLimitExceeded",
     "RateLimitResult",
     "Reason",
     "RequestContext",
     "Rule",
+    "RuleOutcome",
     "TrustedProxies",
     "UniLimitError",
     "UnknownRuleError",
     "__version__",
+    "configure_logging",
 ]

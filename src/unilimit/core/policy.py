@@ -8,11 +8,12 @@ into a :class:`Decision`. Neither performs I/O.
 from __future__ import annotations
 
 import ipaddress
+import logging
 from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
-from unilimit._logging import logger
+from unilimit._logging import throttled
 from unilimit.backends.base import BatchResult, ConsumeOp, OpResult
 from unilimit.core.context import RequestContext
 from unilimit.core.errors import ConfigurationError, IdentityError
@@ -149,11 +150,12 @@ def plan(
         if identity is None:
             mode: OnMissing = (rule.on_missing or config.on_missing) if rule.enforced else "skip"
             if rule.enforced:
-                logger.warning(
+                throttled.log(
+                    logging.WARNING,
+                    f"missing_identity:{rule.name}",
                     "rule %r: no identity resolved (on_missing=%s)",
                     rule.name,
                     mode,
-                    extra={"unilimit_rule": rule.name},
                 )
             if mode == "skip":
                 continue

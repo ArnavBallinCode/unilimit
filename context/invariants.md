@@ -150,3 +150,46 @@ design; under ASGI DRF runs them in a thread, which is why they use the sync cli
 **Enforced by:** `test_wsgi_async_views_use_the_sync_client`,
 `test_throttles_under_asgi` and the leak checks (`filterwarnings = error`, GC after
 each test).
+
+## 12. Observability never affects enforcement
+
+Events, observers, metrics and logging are emitted after a decision is made. An observer
+that raises (or an event that fails to build) is caught and logged by category; the
+request proceeds exactly as without it. Events contain rule names, algorithms, backend
+kind, outcomes and timings only: never identities, IPs, storage keys, paths, headers or
+error messages. Without an observer no event is built. Failure logs are throttled per
+category, process-locally, and logging errors are swallowed.
+
+**Enforced by:** `test_observer_exceptions_never_change_decisions`,
+`test_observer_exceptions_async`, `test_building_an_event_cannot_break_enforcement`,
+`test_no_event_is_built_without_an_observer`, `test_events_never_contain_sensitive_data`,
+`test_prometheus_never_exposes_identities_or_paths`, `test_event_schema_is_stable`,
+`test_throttling_is_exact_under_concurrent_failures`,
+`test_a_burst_of_failures_through_the_limiter_logs_once`,
+`test_a_failing_log_handler_never_raises`, `test_metrics_are_exact_under_concurrency`.
+
+Mutation-checked: letting observer exceptions propagate, and disabling suppression, each
+fail tests.
+
+## 13. The local fallback only tightens fail-open
+
+`Limiter(fallback=...)` is off by default and used only when the backend raised
+`BackendUnavailable` and **every enforcing rule's effective `fail_mode` is open**. A
+closed rule (or closed limiter default) is never given to the fallback: the fallback
+would admit what fail-closed rejects. Its counters are per process and start empty; they
+are not merged into Redis on recovery and expire by TTL. `peek` never uses it. Its
+decisions are marked `Decision.fallback` / `RateLimitResult.fallback`, logged and emitted.
+
+**This is the one documented exception to invariant 3 (never over-admit):** with N
+workers the effective limit during an outage is up to N times the configured one. It is
+explicit opt-in, so the default behaviour is unchanged.
+
+**Enforced by:** `test_fallback_never_loosens_a_fail_closed_rule`,
+`test_fallback_default_fail_mode_closed_stays_closed`,
+`test_fail_closed_rules_do_not_use_the_fallback_on_real_redis`,
+`test_fallback_is_off_by_default`, `test_fallback_enforces_locally_and_is_visible`,
+`test_fallback_deactivates_on_recovery_and_does_not_double_consume`,
+`test_peek_never_uses_the_fallback`, `test_fallback_serves_during_a_real_outage_and_stops_on_recovery`,
+`test_cluster_primary_crash_is_observable`.
+
+Mutation-checked: removing the fail-closed check fails three tests.

@@ -11,8 +11,9 @@ task before changing code.
 ## Status
 
 Pre-alpha, built milestone by milestone. Done: core, algorithms, memory backend, Redis
-backend (standalone and Cluster), FastAPI integration, Django and DRF integrations (M5).
-Next: observability and hardening (M6), only when asked. Details are in
+backend (standalone and Cluster), FastAPI integration, Django and DRF integrations (M5),
+observability, throttled failure logging, opt-in local fallback and benchmarks (M6).
+Next: release preparation (M7), only when asked. Details are in
 [`context/status.md`](context/status.md).
 
 ## Commands
@@ -37,6 +38,7 @@ Other useful runs:
 ```bash
 uv run --with fastapi==0.115.0 pytest tests/fastapi_integration   # oldest supported FastAPI
 uv run --with django==5.2.* --with djangorestframework==3.16.* pytest tests/django_integration
+uv run --group bench python -m benchmarks.run --quick             # benchmark tooling smoke test
 HYPOTHESIS_PROFILE=explore uv run pytest tests/unit/algorithms    # deep property fuzzing
 UNILIMIT_DIFF_EXAMPLES=5000 uv run pytest tests/redis_backend/test_lua_differential.py
 ```
@@ -51,12 +53,15 @@ src/unilimit/
   algorithms/      pure reference implementations: fixed/sliding window, token bucket
   backends/        protocols + evaluate_batch (reference), memory, redis/ (Lua + client)
   http.py          framework-free headers and rejection responses
-  integrations/    fastapi/ (middleware, RateLimit, WebSocketRateLimit, setup)
+  observability.py events + observers (framework-free); metrics.py InMemoryMetrics
+  integrations/    prometheus.py, otel.py (optional exporters)
+                   fastapi/ (middleware, RateLimit, WebSocketRateLimit, setup)
                    django/ (middleware, @ratelimit, settings, ASGI lifespan, checks)
                    drf/ (throttles), _common.py (rule building shared by integrations)
 tests/             unit/, conformance/, concurrency/, redis_backend/, fastapi_integration/,
                    django_integration/ (Django and DRF)
-docs/fastapi/, docs/django/, docs/drf/
+benchmarks/        reproducible benchmark tooling and raw results (dependency group `bench`)
+docs/fastapi/, docs/django/, docs/drf/, docs/observability/
                    user guides; every ```python block is executed by the tests
 context/           agent-oriented knowledge: status, decisions, lessons, map, testing
 ARCHITECTURE.md    design and rationale (authoritative)
@@ -94,6 +99,14 @@ ask; do not weaken the test. Rationale is in [`context/invariants.md`](context/i
     throttles are separate atomic steps; a counter an earlier step consumed is skipped
     (`skip_keys`). All UniLimit throttles of a DRF view are one batch, and a UniLimit
     throttle never runs alongside a DRF built-in on the same scope.
+11. **Observability never affects enforcement.** Observers, event construction, metrics
+    and logging run after the decision, swallow their own exceptions and never change a
+    result. Events carry no identities, IPs, keys, paths or error messages. With no
+    observer nothing is built. Failure logs are throttled per category.
+12. **The local fallback only tightens fail-open.** It is off by default, never used for a
+    `fail_mode="closed"` rule, always visible (`Decision.fallback`, events, log). It is the
+    one documented, opt-in exception to invariant 3 (up to N workers × limit during an
+    outage).
 
 ## Coding conventions
 
@@ -117,8 +130,9 @@ Details: [`context/testing.md`](context/testing.md).
 - New algorithm or Lua logic needs Hypothesis properties *and* differential tests, and
   should be mutation-checked (break the code and confirm a test fails).
 - Every `docs/fastapi/*.md` page is executed by `tests/fastapi_integration/test_docs.py`,
-  and every `docs/django/*.md` and `docs/drf/*.md` page by
-  `tests/django_integration/test_docs.py`. Examples must run as written, using
+  every `docs/django/*.md` and `docs/drf/*.md` page by
+  `tests/django_integration/test_docs.py`, and `docs/observability/*.md` by
+  `tests/redis_backend/test_observability_docs.py`. Examples must run as written, using
   `redis://localhost:6379/0`, which the test substitutes.
 - Tests run a GC pass after each Redis or FastAPI test. A `ResourceWarning` means you
   leaked a client or socket: close it.
@@ -155,3 +169,4 @@ is welcome, under these rules:
 - Do not touch a developer's own Redis (port 6379); tests use their own servers.
 - Do not start a new milestone's scope without being asked.
 - Do not claim something works without running the tests that prove it.
+- Do not claim UniLimit is faster than another library unless `benchmarks/` data shows it.

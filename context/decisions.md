@@ -90,3 +90,23 @@ decision needs the maintainer's agreement and a new entry here.
 | `with_lifespan(app)` closes Redis clients on ASGI shutdown; nothing for WSGI | Django's ASGI handler ignores lifespan; WSGI has no shutdown protocol |
 | The Django and DRF test apps exempt `/`; the FastAPI worker test app does too | Local tooling (`node` port scanners) probes `/` on listening ports and spent the global budget, flaking exact-count tests (lessons.md) |
 | Not done in M5: `query:`/`post:` keys, in-memory fallback, temporary bans, new algorithms | Out of scope; callables cover custom keys |
+
+## M6
+
+| Decision | Rationale |
+|---|---|
+| Observability is a synchronous `Observer` callable receiving typed frozen events (`DecisionEvent`, `BackendUnavailableEvent`, `BreakerEvent`, `FallbackEvent`) with `to_dict()` and `SCHEMA_VERSION` | Framework-free, no dependencies, trivially testable; exporters are just observers |
+| Events are built lazily through `Emitter.emit(factory)`; the cost without observers is one truthiness check | Hot-path overhead must not be paid by users who do not observe |
+| Observer exceptions are caught (`Exception` only), logged by category with the class name, and ignored | An observability bug must never change enforcement (invariant 12). Observers run inline; slow ones are the user's responsibility (documented) |
+| Events never carry identities, IPs, keys, paths or error messages; breaker/backend events carry exception *class names* | Invariant 5 extended to telemetry |
+| Backends opt in to events through an optional `attach_emitter` / `name` (duck-typed, not in the `Backend` protocol) | Third-party backends keep working; the Redis breaker emits `open` / `half_open` / `closed` |
+| Metrics are derived from events: `InMemoryMetrics` (core), `PrometheusObserver` (`unilimit[prometheus]`), `OpenTelemetryObserver` (`unilimit[otel]`) | One set of semantics; no telemetry SDK of our own |
+| Prometheus labels are bounded (reason, source, rule name, backend, exception class); `rule_label=False` drops the rule | Never identities or paths as labels |
+| OpenTelemetry: metrics plus **events on the current span for rejections, degraded decisions and backend errors only**; no span per decision | No semantic convention exists; a span per decision costs every request; the HTTP span already exists. API-only dependency |
+| Failure logging goes through a process-local, lock-protected `ThrottledLogger` (default 30 s, `configure_logging(interval=)`), per category, with a suppressed-count summary and flush on recovery/close/fallback deactivation | Replaces the per-request warnings. No shared state: no new distributed dependency; N workers log N first occurrences |
+| Fallback is `Limiter(fallback="memory" | MemoryBackend)`, applied in the `Limiter`, only when every enforcing rule is fail-open | The `Limiter` knows each rule's fail mode; a wrapper backend would not. Fallback tightens fail-open and never loosens fail-closed |
+| Fallback counters start empty, are not merged on recovery and expire by TTL; `peek` never uses it | Merging needs Redis writes at the moment it is fragile and cannot be atomic across workers; documented N × limit instead |
+| `Decision.fallback` and `RateLimitResult.fallback` fields (default `False`) | Clear distinction between Redis and local enforcement; backward compatible |
+| Benchmarks live in `benchmarks/` with an optional `bench` dependency group; raw JSON is committed | Reproducible and auditable; competitor libraries stay out of the dev environment and CI |
+| No performance claim without data; findings are published even when UniLimit is slower | See `docs/observability/benchmarks.md` |
+| Not done in M6: temporary bans, dashboards, hosted services, new algorithms | Out of scope |

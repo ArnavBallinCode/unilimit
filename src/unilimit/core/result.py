@@ -35,6 +35,8 @@ class RateLimitResult:
     degraded: bool = False
     storage_key: str | None = None
     """Backend key of this counter. It contains only a keyed digest of the identity."""
+    fallback: bool = False
+    """True when the figures come from the process-local fallback, not from the backend."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +52,10 @@ class Decision:
     partial_commit: bool = False
     rule: Rule | None = None
     """For ``MISSING_IDENTITY``: the rule whose identity could not be resolved."""
+    fallback: bool = False
+    """True when the backend was unavailable and the explicitly configured process-local
+    fallback decided. The figures are real but local to this process, not the shared
+    Redis counters."""
 
     @property
     def retry_after(self) -> float | None:

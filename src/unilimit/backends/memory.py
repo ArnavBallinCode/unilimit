@@ -38,6 +38,8 @@ class MemoryBackend:
     least-recently-used entries are evicted; evicting a live entry resets that counter.
     """
 
+    name = "memory"
+
     def __init__(self, *, clock: Clock | None = None, max_keys: int = 100_000) -> None:
         if isinstance(max_keys, bool) or not isinstance(max_keys, int) or max_keys < 1:
             raise ValueError("max_keys must be a positive integer")

@@ -10,6 +10,8 @@
 | `tests/concurrency/` | Threads and asyncio (memory); 8 spawned OS processes (Redis and Cluster) | Partly |
 | `tests/redis_backend/` | Lua vs Python differential, reliability (faults, breaker, OOM, auth, expiry, cancellation), real cluster and failover | Yes |
 | `tests/fastapi_integration/` | Real FastAPI apps over HTTPX/ASGI, WebSockets via an ASGI driver, lifecycle, uvicorn workers over TCP, executable docs | Yes |
+| `tests/unit/test_observability.py`, `test_exporters.py` | Events, observers, schema, privacy, metrics, throttled logging, fallback (fault-injecting backend), Prometheus and OpenTelemetry | No |
+| `tests/redis_backend/test_observability.py`, `test_observability_docs.py` | Breaker transitions, outage and recovery, fallback, Cluster primary crash on real servers; executable observability docs | Yes |
 | `tests/django_integration/` | Real Django and DRF request cycles: WSGI (`django.test.Client`) and ASGI (`ASGIHandler` over HTTPX), sessions and DRF authentication, outage and recovery, concurrency, uvicorn and gunicorn workers over TCP, executable docs | Yes |
 
 ## Infrastructure (`tests/_servers.py`, `tests/_proxy.py`, `tests/conftest.py`)
@@ -50,6 +52,16 @@
 - `_fresh_config` resets the cached `UNILIMIT` config around every test, and
   `_close_thread_connections` closes asgiref-thread database connections.
 - Worker tests start `uvicorn` and `gunicorn` on `tests/django_integration/_e2e_app.py`.
+
+## Observability helpers
+
+- `FlakyBackend` (`tests/unit/test_observability.py`): a memory backend with `down` and
+  `partial` switches that raises `BackendUnavailable`; use it for fault injection without
+  Redis. Real outages use a private `RedisProcess` (`stop()` / `start()`).
+- `Recorder`: an observer that stores events. `_fresh_log_throttle` (autouse in
+  `tests/conftest.py`) resets the process-wide log throttle around every test.
+- Benchmarks: `uv run --group bench python -m benchmarks.run --quick` is the smoke test.
+  Benchmark numbers are not asserted in tests (they are machine-dependent); the harness is.
 
 ## Practices
 

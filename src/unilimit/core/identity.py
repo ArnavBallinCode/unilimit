@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Literal, TypeAlias
 
-from unilimit._logging import logger
+from unilimit._logging import logger, throttled
 from unilimit.core.context import RequestContext
 from unilimit.core.errors import ConfigurationError
 from unilimit.core.keys import validate_kind
@@ -317,7 +318,11 @@ class IdentityResolver:
             if value is not None:
                 return Identity(kind, value)
             if raw is not None:
-                logger.warning(
-                    "rule %r: malformed %s identity ignored (value redacted)", rule_name, kind
+                throttled.log(
+                    logging.WARNING,
+                    f"malformed_identity:{rule_name}",
+                    "rule %r: malformed %s identity ignored (value redacted)",
+                    rule_name,
+                    kind,
                 )
         return None
