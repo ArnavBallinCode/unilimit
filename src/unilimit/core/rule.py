@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 from unilimit.algorithms import Algorithm, LimitSpec
 from unilimit.core.context import RequestContext
@@ -144,6 +144,20 @@ class Rule:
         object.__setattr__(self, "fail_mode", fail_mode)
         object.__setattr__(self, "action", action)
         object.__setattr__(self, "spec", spec)
+
+    @classmethod
+    def many(cls, name: str, rates: str, **options: Any) -> tuple[Rule, ...]:
+        """One rule per rate of a multi-limit string such as ``"10/second;1000/day"``.
+
+        This is the syntax of the ``limits`` library, as used by slowapi and Flask-Limiter.
+        With a single rate the rule is called ``name``; with several, each rule is called
+        ``"{name}:{rate}"`` (for example ``"api:10/1s"``) so that each keeps its own
+        counter. ``options`` are passed to every rule.
+        """
+        parsed = Rate.parse_many(rates)
+        if len(parsed) == 1:
+            return (cls(name, parsed[0], **options),)
+        return tuple(cls(f"{name}:{rate}", rate, **options) for rate in parsed)
 
     @property
     def limit(self) -> int:

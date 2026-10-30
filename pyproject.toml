@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "One consistent, production-grade rate limiting core for Django, FastAPI and plain Python."
 readme = "README.md"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.11"
 authors = [{ name = "Arnav Angarkar" }]
 keywords = ["rate limit", "ratelimit", "throttle", "redis", "django", "fastapi", "asyncio"]
@@ -53,6 +53,7 @@ dev = [
     "fastapi>=0.162.0",
     "httpx>=0.28.1",
     "uvicorn>=0.30",
+    "limits>=5.8.0",
 ]
 
 [tool.hatch.version]
@@ -62,7 +63,16 @@ path = "src/unilimit/_version.py"
 packages = ["src/unilimit"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/unilimit", "tests", "README.md", "LICENSE", "ARCHITECTURE.md", "API_DESIGN.md"]
+include = [
+    "src/unilimit",
+    "tests",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "ARCHITECTURE.md",
+    "API_DESIGN.md",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

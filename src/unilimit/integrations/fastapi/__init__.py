@@ -47,6 +47,7 @@ from unilimit.integrations.fastapi.dependency import (
     RateLimitExceeded,
 )
 from unilimit.integrations.fastapi.middleware import UniLimitMiddleware
+from unilimit.integrations.fastapi.websocket import WebSocketRateLimit, WebSocketRateLimitExceeded
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: Exception) -> Response:
@@ -99,6 +100,8 @@ __all__ = [
     "RequestState",
     "ResponseConfig",
     "UniLimitMiddleware",
+    "WebSocketRateLimit",
+    "WebSocketRateLimitExceeded",
     "rate_limit_exceeded_handler",
     "setup",
 ]

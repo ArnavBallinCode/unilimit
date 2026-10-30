@@ -113,3 +113,13 @@ def test_limit_spec_validates_invariants() -> None:
     ):
         with pytest.raises(ValueError, match=r"positive integer|rate too high|capacity|10 years"):
             LimitSpec(*bad)
+
+
+def test_rule_many_from_a_limits_string() -> None:
+    single = Rule.many("api", "10/second", key="user")
+    assert [r.name for r in single] == ["api"]
+    rules = Rule.many("api", "10/second;1000/day", key="user", algorithm="fixed_window")
+    assert [r.name for r in rules] == ["api:10/1s", "api:1000/1d"]  # one counter each
+    assert all(r.key == ("user",) and r.algorithm == "fixed_window" for r in rules)
+    with pytest.raises(ConfigurationError, match="several rates"):
+        Rule("api", "10/second;1000/day")

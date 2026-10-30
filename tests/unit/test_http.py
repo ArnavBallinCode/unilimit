@@ -126,3 +126,13 @@ def test_invalid_configuration() -> None:
         ResponseConfig(rate_limited_status=200)
     with pytest.raises(ValueError, match="nothing to reject"):
         rejection_response(Decision(allowed=True, reason=Reason.ALLOWED))
+
+
+def test_retry_after_as_http_date() -> None:
+    config = ResponseConfig(retry_after_format="http-date")
+    headers = dict(
+        rate_limit_headers([result(allowed=False, retry_after=2.5)], config, rejected=True, now=0)
+    )
+    assert headers["Retry-After"] == "Thu, 01 Jan 1970 00:00:03 GMT"
+    with pytest.raises(ValueError, match="retry_after_format"):
+        ResponseConfig(retry_after_format="minutes")  # type: ignore[arg-type]

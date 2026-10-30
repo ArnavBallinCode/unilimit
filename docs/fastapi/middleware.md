@@ -85,5 +85,5 @@ Response headers describe the most restrictive counter across every step.
 
 ## WebSockets
 
-The middleware passes WebSocket connections through unchanged. Limit WebSocket
-messages with `limiter.aconsume(...)` inside your handler.
+The middleware passes WebSocket connections through unchanged. Limit connections and
+messages with [`WebSocketRateLimit`](websockets.md).

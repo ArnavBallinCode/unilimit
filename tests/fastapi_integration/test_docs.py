@@ -3,6 +3,7 @@ order, against a real Redis, and the behaviour the page describes is checked ove
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 
 from unilimit import Limiter
 
-from .conftest import client, lifespan, ratelimit_headers
+from .conftest import WebSocketSession, client, lifespan, ratelimit_headers
 
 DOCS = Path(__file__).resolve().parents[2] / "docs" / "fastapi"
 PAGES = sorted(p.name for p in DOCS.glob("*.md"))
@@ -57,6 +58,7 @@ def test_every_page_has_examples() -> None:
         "middleware.md",
         "quickstart.md",
         "redis.md",
+        "websockets.md",
     }
     for page in PAGES:
         assert python_blocks(page), page
@@ -110,6 +112,8 @@ async def test_dependencies_page(run_page: Any) -> None:
         assert ratelimit_headers(audit)["x-ratelimit-remaining"] == "59"  # per route
         logins = [(await c.post("/login")).status_code for _ in range(6)]
         assert logins == [200] * 5 + [429]
+        uploads = [(await c.post("/upload")).status_code for _ in range(3)]
+        assert uploads == [200, 200, 429]
 
 
 async def test_authentication_page(run_page: Any) -> None:
@@ -175,3 +179,16 @@ async def test_errors_page(run_page: Any) -> None:
     assert rejected.status_code == 429
     assert rejected.json() == {"error": "rate_limited"}  # the page's own handler
     assert "retry-after" in ratelimit_headers(rejected)
+
+
+async def test_websockets_page(run_page: Any) -> None:
+    app = run_page("websockets.md")["app"]
+    session = WebSocketSession(app, "/chat")
+    assert (await session.connect())["type"] == "websocket.accept"
+    replies = []
+    for i in range(6):
+        await session.send_text(str(i))
+        replies.append(await asyncio.wait_for(session.from_app.get(), 5))
+    await session.close()
+    assert [r.get("text") for r in replies[:5]] == [f"echo: {i}" for i in range(5)]
+    assert '"rate_limited"' in replies[5]["text"]  # the sixth message within a second

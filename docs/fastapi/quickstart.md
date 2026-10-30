@@ -69,5 +69,6 @@ X-RateLimit-Reset: 54
 - [Dependencies](dependencies.md): endpoint, router and shared limits.
 - [Authentication](authentication.md): limiting by authenticated user.
 - [Custom identities](identity.md): API keys, tenants and your own functions.
+- [WebSockets](websockets.md): connection and message limits.
 - [Redis and lifecycle](redis.md): connections, clusters and shutdown.
 - [Errors and headers](errors-and-headers.md): status codes, bodies and headers.

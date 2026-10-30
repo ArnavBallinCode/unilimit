@@ -121,6 +121,7 @@ Rule(
 ```
 
 - **Rate grammar:** `"<int>/<unit>"` or `"<int>/<n><unit>"`. Units are `s|sec|second`, `m|min|minute`, `h|hour`, `d|day`, with plurals accepted (`"10/5s"`, `"1000/day"`, `"5/30 seconds"`). `window` also accepts `int` seconds and `timedelta`.
+- **Several rates** (the `limits` / slowapi syntax): `Rule.many("api", "10/second;1000/day", key="user")` returns one rule per rate, named `"api:10/1s"` and `"api:1000/1d"`. Separators are `;`, `,` and `|`; `month` = 30 days and `year` = 360 days, as in `limits`. The FastAPI `RateLimit("api", rate="10/second;1000/day")` accepts the same strings and consumes the rules atomically.
 - **Validation** happens at construction time and raises `ConfigurationError`. Cases: rate given together with limit/window; limit < 1; window < 1 ms; `W/limit` < 1 µs; `burst` set for a non-token-bucket rule; a static `cost` above capacity; an invalid name; an unknown key spec.
 - Rules are **frozen, hashable dataclasses**, so they are safe to share across routes and threads.
 - The rule name together with the algorithm identifies the counter (ARCHITECTURE §5). Using the same `Rule` object on two routes **shares** its counters. Two *different* rules with the same name and algorithm but different limits make `evaluate` raise `ConfigurationError` if both apply to the same request.
@@ -299,6 +300,7 @@ ResponseConfig(
     legacy_headers=True,  # X-RateLimit-Limit / -Remaining / -Reset, Retry-After on rejection
     ietf_headers=False,  # RateLimit-Policy / RateLimit (draft-11), opt-in
     reset_format="delta",  # "delta" (seconds) | "epoch" (Unix time)
+    retry_after_format="seconds",  # "seconds" | "http-date"
 )
 
 rate_limit_headers(results, config, rejected=False)  # -> list[(name, value)]
@@ -383,7 +385,21 @@ Changed from M1: the M1 plan merged global and route rules into a single batch t
 
 **Decorator:** not provided (decision D8).
 
-**WebSockets:** passed through unchanged; use `limiter.aconsume` per message.
+### 5.4 WebSockets
+
+```python
+connect = WebSocketRateLimit("chat-connect", rate="10/minute")  # same options as RateLimit
+messages = WebSocketRateLimit("chat-message", rate="5/second;100/minute")
+
+
+@app.websocket("/chat", dependencies=[Depends(connect)])  # rejected handshake: close 1008
+async def chat(websocket: WebSocket):
+    await websocket.accept()
+    ...
+    decision = await messages.consume(websocket, user_id=None)  # per message; never raises
+```
+
+The HTTP middleware passes WebSockets through, so global rules do not apply to them.
 
 ---
 

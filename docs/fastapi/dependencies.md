@@ -48,6 +48,14 @@ stacked = RateLimit(
     Rule("export-daily", "20/day"),
 )
 
+# The same, written in the multi-limit syntax of slowapi / Flask-Limiter / limits.
+uploads = RateLimit("uploads", rate="2/minute;20/day")
+
+
+@app.post("/upload", dependencies=[Depends(uploads)])
+async def upload() -> dict[str, bool]:
+    return {"ok": True}
+
 
 @app.post("/export", dependencies=[Depends(stacked)])
 async def export() -> dict[str, bool]:
@@ -79,6 +87,15 @@ async def audit() -> list[str]:
 
 app.include_router(admin)
 ```
+
+## Rate strings
+
+`"10/second"`, `"10 per second"`, `"5/30s"`, `"100/day"`, `"1/month"` (30 days) and
+`"1/year"` (360 days). Several rates separated by `;`, `,` or `|`, as in
+`"10/second;1000/day"`, create one rule per rate, each with its own counter, and they
+are consumed together. This is the syntax of the `limits` library, so rate strings from
+slowapi and Flask-Limiter configurations keep their meaning (UniLimit additionally
+accepts compact windows such as `"5/30s"`).
 
 ## Sharing and naming
 

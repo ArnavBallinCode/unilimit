@@ -25,12 +25,18 @@ for _names, _us in (
     (("m", "min", "mins", "minute", "minutes"), 60 * US_PER_SECOND),
     (("h", "hr", "hrs", "hour", "hours"), 3_600 * US_PER_SECOND),
     (("d", "day", "days"), 86_400 * US_PER_SECOND),
+    # As in the `limits` library (and so in slowapi / Flask-Limiter): fixed lengths, not
+    # calendar months or years. Rate strings migrated from those libraries keep their
+    # meaning.
+    (("month", "months"), 30 * 86_400 * US_PER_SECOND),
+    (("y", "year", "years"), 360 * 86_400 * US_PER_SECOND),
 ):
     for _name in _names:
         _UNITS_US[_name] = _us
 
 _DURATION_RE = re.compile(r"^\s*(\d+)?\s*([a-zA-Z]+)\s*$")
 _RATE_RE = re.compile(r"^\s*(\d+)\s*(?:/|\s+per\s+)\s*(.+?)\s*$", re.IGNORECASE)
+_RATE_SEPARATORS = re.compile(r"[,;|]")
 
 MIN_WINDOW_US = 1_000
 """Smallest accepted window: 1 ms."""
@@ -94,12 +100,27 @@ class Rate:
         """Parse ``"100/minute"``, ``"10/5s"`` or ``"5 per 30 seconds"``."""
         if not isinstance(text, str):
             raise ConfigurationError(f"rate must be a string, got {type(text).__name__}")
+        if _RATE_SEPARATORS.search(text):
+            raise ConfigurationError(
+                f"{text!r} contains several rates; use Rule.many() or Rate.parse_many()"
+            )
         match = _RATE_RE.match(text)
         if match is None:
             raise ConfigurationError(
                 f"invalid rate {text!r}; expected e.g. '100/minute', '10/5s', '1000/day'"
             )
         return cls(int(match.group(1)), parse_duration(match.group(2)))
+
+    @classmethod
+    def parse_many(cls, text: str) -> tuple[Rate, ...]:
+        """Parse one or more rates separated by ``;``, ``,`` or ``|``.
+
+        This is the multi-limit syntax of the ``limits`` library, as used by slowapi and
+        Flask-Limiter: ``"10/second;1000/day"``.
+        """
+        if not isinstance(text, str) or not text.strip():
+            raise ConfigurationError(f"invalid rate list {text!r}")
+        return tuple(cls.parse(part) for part in _RATE_SEPARATORS.split(text))
 
     @classmethod
     def of(cls, limit: int, window: Duration) -> Rate:

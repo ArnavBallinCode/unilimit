@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from fastapi import Depends, HTTPException
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import Response
 
 from unilimit._logging import logger
@@ -20,7 +20,12 @@ from unilimit.core.rate import Duration, Rate
 from unilimit.core.result import Decision
 from unilimit.core.rule import Action, AlgorithmName, CostFunc, FailMode, OnMissing, Predicate, Rule
 from unilimit.http import ResponseConfig, ResponseSpec, rate_limit_headers, rejection_response
-from unilimit.integrations.fastapi._state import build_context, request_state, scope_user
+from unilimit.integrations.fastapi._state import (
+    RequestState,
+    build_context,
+    request_state,
+    scope_user,
+)
 
 APP_STATE_LIMITER = "unilimit"
 APP_STATE_RESPONSE = "unilimit_response"
@@ -42,27 +47,28 @@ class RateLimitExceeded(HTTPException, CoreRateLimitExceeded):
         self.spec = spec
 
 
-class RateLimit:
-    """A FastAPI dependency that rate-limits the routes it is attached to.
+class Policies:
+    """Rule definition shared by :class:`RateLimit` and :class:`WebSocketRateLimit`.
 
-    Three ways to name the rules::
+    Rules can be given three ways::
 
-        RateLimit("profile", rate="30/minute", identity=current_user_id)  # inline rule
-        RateLimit("free-tier", "burst")          # rules registered on the Limiter by name
-        RateLimit(Rule("search", rate="10/s"))   # Rule objects, shared across routes
+        RateLimit("profile", rate="30/minute")           # inline rule
+        RateLimit("profile", rate="10/second;1000/day")  # several inline rules (limits syntax)
+        RateLimit("free-tier", "burst")                  # rules registered on the Limiter
+        RateLimit(Rule("search", "10/s"))                # Rule objects, shared across routes
 
-    All rules of one ``RateLimit`` are consumed atomically, all or nothing. Rules
-    with the same name share one counter wherever they are used; ``per_route=True``
-    gives every route its own counter instead.
+    All rules of one instance are consumed atomically, all or nothing. Rules with the
+    same name share one counter wherever they are used; ``per_route=True`` gives every
+    route its own counter instead.
 
     ``identity`` is a FastAPI dependency (sync or async, with its own dependencies)
     returning the authenticated user id (``str``/``int``) or ``None``. FastAPI resolves
-    it **before** the limit is evaluated, caches it per request (an endpoint that uses
-    the same dependency does not call it twice), and its value becomes the ``"user"``
-    identity. Inline rules key on ``"user"`` when ``identity`` is given and on ``"ip"``
-    otherwise; pass ``key=`` for anything else, such as ``"user_or_ip"`` or a callable.
+    it **before** the limit is evaluated and caches it per request, and its value becomes
+    the ``"user"`` identity. Inline rules key on ``"user"`` when ``identity`` is given and
+    on ``"ip"`` otherwise; pass ``key=`` for anything else, such as ``"user_or_ip"`` or a
+    callable.
 
-    The dependency returns the :class:`~unilimit.Decision`.
+    Subclasses define the connection parameters FastAPI injects and the call itself.
     """
 
     def __init__(
@@ -84,31 +90,30 @@ class RateLimit:
         per_route: bool = False,
         limiter: Limiter | None = None,
     ) -> None:
+        kind = type(self).__name__
         if not rules:
-            raise ConfigurationError("RateLimit needs at least one rule or rule name")
-        inline = rate is not None or limit is not None or window is not None
-        if inline:
+            raise ConfigurationError(f"{kind} needs at least one rule or rule name")
+        if rate is not None or limit is not None or window is not None:
             if len(rules) != 1 or not isinstance(rules[0], str):
                 raise ConfigurationError(
-                    "an inline RateLimit takes exactly one name: RateLimit('name', rate='10/s')"
+                    f"an inline {kind} takes exactly one name: {kind}('name', rate='10/s')"
                 )
-            self._rules: tuple[Rule | str, ...] = (
-                Rule(
-                    rules[0],
-                    rate,
-                    limit=limit,
-                    window=window,
-                    algorithm=algorithm,
-                    key=key if key is not None else ("user" if identity else "ip"),
-                    burst=burst,
-                    cost=cost,
-                    methods=methods,
-                    when=when,
-                    on_missing=on_missing,
-                    fail_mode=fail_mode,
-                    action=action,
-                ),
-            )
+            options: dict[str, Any] = {
+                "algorithm": algorithm,
+                "key": key if key is not None else ("user" if identity else "ip"),
+                "burst": burst,
+                "cost": cost,
+                "methods": methods,
+                "when": when,
+                "on_missing": on_missing,
+                "fail_mode": fail_mode,
+                "action": action,
+            }
+            if isinstance(rate, str) and limit is None and window is None:
+                # "10/second;1000/day": several rules, consumed atomically together.
+                self._rules: tuple[Rule | str, ...] = Rule.many(rules[0], rate, **options)
+            else:
+                self._rules = (Rule(rules[0], rate, limit=limit, window=window, **options),)
         else:
             customised = (key, burst, methods, when, on_missing, fail_mode)
             if any(v is not None for v in customised) or cost != 1 or action != "reject":
@@ -128,10 +133,7 @@ class RateLimit:
         if limiter is not None:
             self._resolve(limiter)  # unknown rule names fail at import time, not per request
 
-        params = [
-            inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request),
-            inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response),
-        ]
+        params = self._connection_parameters()
         if identity is not None:
             params.append(
                 inspect.Parameter(
@@ -141,20 +143,24 @@ class RateLimit:
         self._has_identity = identity is not None
         self.__signature__ = inspect.Signature(params, return_annotation=Decision)
 
+    def _connection_parameters(self) -> list[inspect.Parameter]:
+        raise NotImplementedError
+
     def __repr__(self) -> str:
         names = ", ".join(r.name if isinstance(r, Rule) else repr(r) for r in self._rules)
-        return f"RateLimit({names})"
+        return f"{type(self).__name__}({names})"
 
     def _resolve(self, limiter: Limiter) -> tuple[Rule, ...]:
         return tuple(r if isinstance(r, Rule) else limiter.get_rule(r) for r in self._rules)
 
-    def _rules_for(self, limiter: Limiter, request: Request) -> tuple[Rule, ...]:
+    def _rules_for(self, limiter: Limiter, conn: HTTPConnection) -> tuple[Rule, ...]:
         rules = self._resolve(limiter)
         if not self._per_route:
             return rules
-        route = request.scope.get("route")
-        path = str(getattr(route, "path", request.scope.get("path", "/")))
-        methods = ",".join(sorted(getattr(route, "methods", None) or [request.method]))
+        route = conn.scope.get("route")
+        path = str(getattr(route, "path", conn.scope.get("path", "/")))
+        default_method = conn.scope.get("method", "WEBSOCKET")
+        methods = ",".join(sorted(getattr(route, "methods", None) or [default_method]))
         cache_key = (methods, path)
         cached = self._route_rules.get(cache_key)
         if cached is None:
@@ -162,16 +168,34 @@ class RateLimit:
             self._route_rules[cache_key] = cached
         return cached
 
+    def _limiter_for(self, conn: HTTPConnection, state: RequestState) -> Limiter:
+        limiter = self._limiter or state.limiter or _app_state(conn, APP_STATE_LIMITER)
+        if not isinstance(limiter, Limiter):
+            raise ConfigurationError(
+                "no Limiter found: call unilimit.integrations.fastapi.setup(app, limiter) "
+                f"or pass {type(self).__name__}(..., limiter=limiter)"
+            )
+        return limiter
+
+
+class RateLimit(Policies):
+    """A FastAPI dependency that rate-limits the HTTP routes it is attached to.
+
+    See :class:`Policies` for how rules and identities are given. The dependency
+    returns the :class:`~unilimit.Decision`; rejections raise :class:`RateLimitExceeded`.
+    """
+
+    def _connection_parameters(self) -> list[inspect.Parameter]:
+        return [
+            inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request),
+            inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response),
+        ]
+
     async def __call__(
         self, *, request: Request, response: Response, identity: Any = None
     ) -> Decision:
         state = request_state(request.scope)
-        limiter = self._limiter or state.limiter or _app_state(request, APP_STATE_LIMITER)
-        if not isinstance(limiter, Limiter):
-            raise ConfigurationError(
-                "no Limiter found: call unilimit.integrations.fastapi.setup(app, limiter) "
-                "or pass RateLimit(..., limiter=limiter)"
-            )
+        limiter = self._limiter_for(request, state)
         config = state.response or _app_state(request, APP_STATE_RESPONSE) or ResponseConfig()
         if not state.middleware and limiter.global_rules:
             _warn_once(
@@ -217,8 +241,8 @@ def _scoped(rule: Rule, route: str) -> Rule:
     )
 
 
-def _app_state(request: Request, name: str) -> Any:
-    return getattr(request.app.state, name, None) if "app" in request.scope else None
+def _app_state(conn: HTTPConnection, name: str) -> Any:
+    return getattr(conn.app.state, name, None) if "app" in conn.scope else None
 
 
 _warned: set[str] = set()
@@ -230,4 +254,4 @@ def _warn_once(message: str) -> None:
         logger.warning(message)
 
 
-__all__ = ["RateLimit", "RateLimitExceeded"]
+__all__ = ["Policies", "RateLimit", "RateLimitExceeded"]

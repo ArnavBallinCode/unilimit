@@ -78,3 +78,42 @@ async def make_limiter(request: pytest.FixtureRequest) -> AsyncIterator[LimiterF
 
 def new_app(**kwargs: Any) -> FastAPI:
     return FastAPI(**kwargs)
+
+
+class WebSocketSession:
+    """Drives one ASGI WebSocket connection directly (httpx has no WebSocket support)."""
+
+    def __init__(self, app: Any, path: str, peer: tuple[str, int] = ("203.0.113.10", 5000)):
+        self.to_app: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.from_app: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0"},
+            "scheme": "ws",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": [(b"host", b"testserver")],
+            "client": peer,
+            "server": ("testserver", 80),
+            "subprotocols": [],
+            "state": {},
+        }
+        self.task = asyncio.create_task(app(scope, self.to_app.get, self.from_app.put))
+
+    async def connect(self) -> dict[str, Any]:
+        """Returns the app's answer: ``websocket.accept`` or ``websocket.close``."""
+        await self.to_app.put({"type": "websocket.connect"})
+        return await asyncio.wait_for(self.from_app.get(), 5)
+
+    async def send_text(self, text: str) -> None:
+        await self.to_app.put({"type": "websocket.receive", "text": text})
+
+    async def receive_text(self) -> str:
+        message = await asyncio.wait_for(self.from_app.get(), 5)
+        assert message["type"] == "websocket.send", message
+        return str(message["text"])
+
+    async def close(self) -> None:
+        await self.to_app.put({"type": "websocket.disconnect", "code": 1000})
+        await asyncio.wait_for(self.task, 5)

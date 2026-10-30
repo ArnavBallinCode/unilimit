@@ -83,3 +83,42 @@ def test_rate_accessors_and_str() -> None:
     assert str(Rate(1, 1_500)) == "1/1500us"
     assert str(Rate(1, 2_000)) == "1/2ms"
     assert Rate.of(5, "1h") == Rate(5, 3_600 * S)
+
+
+# -- compatibility with the `limits` grammar (slowapi, Flask-Limiter) -------------------
+
+LIMITS_STRINGS = [
+    "1/second",
+    "10/minute",
+    "1 per hour",
+    "100/day",
+    "1/month",
+    "2 per year",
+    "5 per 2 minutes",
+    "10/second;100/day",
+    "10/second, 100/day",
+    "1/second|5/minute|100/hour",
+    "3 per 10 seconds; 1000 per day",
+]
+
+
+@pytest.mark.parametrize("text", LIMITS_STRINGS)
+def test_rate_strings_mean_what_they_mean_in_limits(text: str) -> None:
+    """Strings copied from slowapi / Flask-Limiter configurations keep their meaning."""
+    limits = pytest.importorskip("limits")
+    theirs = [(item.amount, item.get_expiry() * S) for item in limits.parse_many(text)]
+    ours = [(r.limit, r.window_us) for r in Rate.parse_many(text)]
+    assert ours == theirs
+
+
+def test_month_and_year_follow_limits_not_the_calendar() -> None:
+    assert Rate.parse("1/month").window_us == 30 * 86_400 * S
+    assert Rate.parse("1/year").window_us == 360 * 86_400 * S
+
+
+def test_several_rates_need_the_many_apis() -> None:
+    with pytest.raises(ConfigurationError, match="several rates"):
+        Rate.parse("1/second;2/day")
+    with pytest.raises(ConfigurationError):
+        Rate.parse_many("")
+    assert Rate.parse_many("5/s") == (Rate(5, S),)

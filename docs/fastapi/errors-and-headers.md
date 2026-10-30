@@ -53,6 +53,7 @@ setup(
         rate_limited_status=429,
         unavailable_status=503,
         reset_format="delta",  # or "epoch" for a Unix timestamp
+        retry_after_format="seconds",  # or "http-date"
         legacy_headers=True,  # X-RateLimit-*
         ietf_headers=False,  # RateLimit-Policy / RateLimit (IETF draft-11), opt-in
     ),

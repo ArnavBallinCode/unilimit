@@ -11,7 +11,8 @@ Headers (``legacy_headers``, on by default):
 - ``X-RateLimit-Reset``: seconds until full capacity is restored (rounded up), or a Unix
   timestamp with ``reset_format="epoch"``.
 - ``Retry-After``: on rejection, whole seconds until the request could succeed (at least
-  1). Omitted when it can never succeed (cost above capacity).
+  1), or an HTTP date with ``retry_after_format="http-date"``. Omitted when it can never
+  succeed (cost above capacity).
 
 The draft IETF fields ``RateLimit-Policy`` / ``RateLimit``
 (draft-ietf-httpapi-ratelimit-headers-11) are opt-in via ``ietf_headers=True``. They
@@ -26,6 +27,7 @@ import math
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from email.utils import formatdate
 from typing import Any, Literal
 
 from unilimit.core.result import Decision, RateLimitResult, Reason
@@ -78,10 +80,14 @@ class ResponseConfig:
     legacy_headers: bool = True
     ietf_headers: bool = False
     reset_format: Literal["delta", "epoch"] = "delta"
+    retry_after_format: Literal["seconds", "http-date"] = "seconds"
+    """``Retry-After`` as delay seconds (default) or as an HTTP date (RFC 9110 §10.2.3)."""
 
     def __post_init__(self) -> None:
         if self.reset_format not in ("delta", "epoch"):
             raise ValueError("reset_format must be 'delta' or 'epoch'")
+        if self.retry_after_format not in ("seconds", "http-date"):
+            raise ValueError("retry_after_format must be 'seconds' or 'http-date'")
         for name in (
             "rate_limited_status",
             "denied_status",
@@ -172,7 +178,12 @@ def rate_limit_headers(
             )
         )
     if rejected and binding.retry_after is not None:
-        headers.append(("Retry-After", str(max(1, math.ceil(binding.retry_after - 1e-9)))))
+        delay = max(1, math.ceil(binding.retry_after - 1e-9))
+        if config.retry_after_format == "http-date":
+            moment = (time.time() if now is None else now) + delay
+            headers.append(("Retry-After", formatdate(math.ceil(moment), usegmt=True)))
+        else:
+            headers.append(("Retry-After", str(delay)))
     return headers
 
 

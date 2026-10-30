@@ -487,6 +487,9 @@ Request state (results, consumed storage keys) lives in `scope["state"]["unilimi
 | Concurrency (in-flight) limits | Post-v0.1 (lease keys + release hook) |
 | Calendar-aligned daily/monthly quotas | Post-v0.1 |
 | OpenTelemetry/Prometheus adapters | Post-v0.1, on the M6 `Hook` protocol |
+| `limits`-compatible multi-rate strings, `month`/`year`; `WebSocketRateLimit`; HTTP-date `Retry-After` | **Done** (adopted from limits / fastapi-limiter / slowapi; see `context/prior-art.md`) |
+| Local degraded limiting when Redis is down (`fail_mode="local"`, after slowapi's `in_memory_fallback`) | M6 |
+| `header:` / `query:` / `post:` key sources, IPv4 mask (after django-ratelimit) | M5 |
 
 ---
 
