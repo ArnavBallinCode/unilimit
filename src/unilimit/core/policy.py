@@ -217,19 +217,37 @@ def decide(planned: Plan, batch: BatchResult) -> Decision:
         if rejecting
         else None
     )
-    return Decision(allowed=False, reason=Reason.RATE_LIMITED, results=results, binding=binding)
+    return Decision(
+        allowed=False,
+        reason=Reason.RATE_LIMITED,
+        results=results,
+        binding=binding,
+        partial_commit=batch.partial_commit,
+    )
 
 
 def is_fail_closed(rule: Rule, default: FailMode) -> bool:
     return (rule.fail_mode or default) == "closed"
 
 
-def decide_unavailable(planned: Plan, default: FailMode) -> Decision:
+def decide_unavailable(
+    planned: Plan, default: FailMode, *, partial_commit: bool = False
+) -> Decision:
     """The backend was unavailable: apply each rule's fail mode (ARCHITECTURE.md §10)."""
     closed = any(e.rule.enforced and is_fail_closed(e.rule, default) for e in planned.entries)
     results = tuple(degraded_result(e.rule, not closed) for e in planned.entries)
     if closed:
         return Decision(
-            allowed=False, reason=Reason.BACKEND_UNAVAILABLE, results=results, degraded=True
+            allowed=False,
+            reason=Reason.BACKEND_UNAVAILABLE,
+            results=results,
+            degraded=True,
+            partial_commit=partial_commit,
         )
-    return Decision(allowed=True, reason=Reason.ALLOWED, results=results, degraded=True)
+    return Decision(
+        allowed=True,
+        reason=Reason.ALLOWED,
+        results=results,
+        degraded=True,
+        partial_commit=partial_commit,
+    )

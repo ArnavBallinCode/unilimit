@@ -485,8 +485,13 @@ def test_from_url() -> None:
     assert isinstance(limiter.backend, MemoryBackend)
     assert limiter.namespace == "app"
     assert limiter.fail_mode == "closed"
+    clock = ManualClock()
+    with_clock = Limiter.from_url("memory://", clock=clock, max_keys=10)
+    assert isinstance(with_clock.backend, MemoryBackend)
+    with pytest.raises(ConfigurationError, match="do not apply to memory"):
+        Limiter.from_url("memory://", cluster=True)
     with pytest.raises(ConfigurationError, match="unsupported backend URL scheme"):
-        Limiter.from_url("redis://localhost:6379")
+        Limiter.from_url("memcached://localhost:11211")
 
 
 def test_identity_secret_changes_keys() -> None:

@@ -1,6 +1,6 @@
 # UniLimit — Architecture
 
-Status: **Approved at the Milestone 1 review, with revisions (R1–R5 below). Milestone 2 is complete:** the core, the three algorithms, the memory backend and the sync/async APIs are implemented and tested. Redis (M3) and the framework integrations (M4, M5) are not implemented yet.
+Status: **Approved at the Milestone 1 review, with revisions (R1–R5 below). Milestones 2 and 3 are complete:** the core, the three algorithms, the memory backend and the Redis backend (standalone, Sentinel-compatible clients and Cluster; sync and async) are implemented and tested against real servers. The framework integrations (M4, M5) are not implemented yet.
 
 Companion document: [API_DESIGN.md](API_DESIGN.md).
 
@@ -84,7 +84,7 @@ Companion document: [API_DESIGN.md](API_DESIGN.md).
  ┌───────────────────────────────▼─────────────────────────────────────────┐
  │ Backends: SyncBackend / AsyncBackend protocols                          │
  │   MemoryBackend   evaluates batches with algorithms/*   [M2]            │
- │   RedisBackend    Lua batch script, redis-py sync+async [M3]            │
+ │   RedisBackend    Lua batch script, redis-py sync+async [M3, done]      │
  └───────────────────────────────┬─────────────────────────────────────────┘
                                  │
  ┌───────────────────────────────▼─────────────────────────────────────────┐
@@ -136,7 +136,7 @@ src/unilimit/
   backends/
     base.py              ConsumeOp, OpResult, BatchResult, protocols, evaluate_batch()
     memory.py            MemoryBackend (both protocols)
-    redis/               [M3]
+    redis/               batch.lua, sans-I/O protocol, error mapping, backend
   http.py, telemetry.py  [M6]
   integrations/          [M4, M5]
 tests/  unit/ conformance/ concurrency/  (redis/ fastapi/ django/ integration/ in later milestones)
@@ -201,10 +201,10 @@ No compensating decrements exist anywhere in the design. Rejected requests never
 | Deployment | Mechanism | Guarantee |
 |---|---|---|
 | Memory | `evaluate_batch()` under one process-wide lock | **Fully atomic** across all rules and identities |
-| Redis standalone / Sentinel | **One Lua script per batch.** A non-cluster Redis lets one script touch any keys, so the script evaluates all ops and then writes all of them. | **Fully atomic** across all rules and identities, in one round trip |
+| Redis standalone / Sentinel | **One Lua script per batch.** A non-cluster Redis lets one script touch any keys, so the script evaluates all ops and then writes all of them. | **Fully atomic** across all rules and identities, in one round trip. Verified with 8 OS processes: per-user consumption equals admissions exactly. |
 | Redis Cluster, all ops for one identity | Keys share a hash tag, so they are in one slot and one script runs | **Fully atomic** |
-| Redis Cluster, ops for several identities (for example a user rule plus an IP rule) | Ops are grouped by slot. **Phase 1:** read-only evaluation of every group in one pipelined round trip; any rejection returns immediately with nothing written. **Phase 2:** each group runs the atomic evaluate-then-commit script, groups in a deterministic order. | **Never over-admits.** Without contention nothing is consumed on rejection. The one residual case: if another request changes a later group's state *between phase 1 and phase 2* and that group now rejects, the earlier groups stay committed. This is over-consumption (conservative), never over-admission, and it is reported as `Decision.partial_commit=True` and logged. |
-| Redis Cluster with `cluster_hash_tag="namespace"` (opt-in, M3) | Every key lives in one slot | Fully atomic. Trades away sharding for strictness. |
+| Redis Cluster, ops for several identities (for example a user rule plus an IP rule) | Ops are grouped by slot. **Phase 1:** read-only evaluation of every group (concurrently on the async path); any rejection returns immediately with nothing written. **Phase 2:** groups are committed one at a time, enforcing groups in declaration order and shadow-only groups last. **Each commit is the same atomic script, which re-evaluates the group against current state**; nothing from phase 1 is trusted. | **Never over-admits:** a request is admitted only if every group committed. Without contention nothing is consumed on rejection. If another request changes a later group's state between the phases and that group now rejects, earlier groups stay committed and the request is rejected with `Decision.partial_commit=True`. The same flag is set when a backend failure interrupts phase 2 after a commit. Verified under 8-process contention: per-user consumption equalled admissions plus reported partial commits exactly (38–46 partial commits per run at the limit boundary). |
+| Redis Cluster, strict single-slot mode | *Not implemented.* Putting every key in one slot would make cross-identity batches atomic at the cost of all sharding. | Candidate for a later release if users need it. |
 
 Why there is no cross-slot transaction: Redis Cluster offers no atomic primitive across slots, and `MULTI`/`WATCH` across nodes is impossible. Faking one with locks would add latency and new failure modes, such as lock expiry during a GC pause. The two-phase approach above is the strongest cross-slot behaviour available without compensation.
 
@@ -277,10 +277,10 @@ The Python modules are the **reference model**. `MemoryBackend` executes them di
 
 | Backend | Clock | Rationale |
 |---|---|---|
-| Redis [M3] | Redis `TIME` read inside the script | One clock for all workers and hosts |
+| Redis | Redis `TIME` read inside the script (the script argument `now` is `''`) | One clock for all workers and hosts |
 | Memory | `time.monotonic_ns() // 1000`, injectable | Single process; immune to wall-clock jumps |
 
-Both backends accept an injected clock for tests. In M2, `unilimit.testing.ManualClock` provides one. The M3 script will take an explicit `now_us` argument (`0` means use `TIME`). If a clock goes backwards, as after a Redis failover to a replica with a skewed clock, elapsed time is clamped at 0. Limits stay safe; they are briefly stricter.
+Both backends accept an injected clock for tests (`unilimit.testing.ManualClock`); the Redis script then receives an explicit `now_us`. The sentinel for "use `TIME`" is the empty string. An earlier `0` sentinel was ambiguous with a real clock value of 0, and the differential tests caught it. If a clock goes backwards, as after a Redis failover to a replica with a skewed clock, elapsed time is clamped at 0. Limits stay safe; they are briefly stricter.
 
 ---
 
@@ -347,22 +347,36 @@ The M1 document wrote `{ns}:…:{rule}`, which looks like literal braces and wou
 - **Per-process only.** N workers mean N independent limits.
 - The algorithm is stored next to each state. Reading state with a different algorithm raises `BackendError` instead of misinterpreting it; the Redis script will do the same. Normal keys cannot hit this, because the algorithm code is part of the key.
 
-### 9.5 Redis backend [M3]
+### 9.5 Redis backend
 
-- **Script:** one Lua script, `consume_batch`, takes `KEYS` and per-op `ARGV` (algorithm, limit, window, capacity, cost, enforce, now). It runs phase 1 (evaluate everything) and then phase 2 (write only if all enforcing ops allow). A `peek_batch` script is the read-only variant used for `peek` and for cluster phase 1. Both are loaded with `register_script`, which uses `EVALSHA` and falls back on `NOSCRIPT`.
-- **Clients:** a sync `redis.Redis`/`RedisCluster`, and async `redis.asyncio` clients created **per event loop** (`WeakKeyDictionary`), because async pools are bound to a loop. User-supplied clients are used as-is.
-- **Timeouts and cooldown:** 0.25 s connect and socket timeouts by default. After a connection failure the backend fails fast for `cooldown` seconds (default 1.0).
-- **Supported servers:** Redis ≥ 6.2 and Valkey ≥ 7.2: standalone, Sentinel (user-supplied client), Cluster, TLS.
-- **Cancellation:** if a task is cancelled mid-script, the script either ran completely or not at all, because Lua scripts are atomic. redis-py ≥ 5 discards the connection. UniLimit never shields backend calls from cancellation.
+**Script.** One Lua script (`backends/redis/batch.lua`) serves consume (`'c'`) and peek (`'p'`). For each key it reads state, rejects state written by another algorithm or unparsable state (returning an error *before any write*), evaluates every op with a line-by-line port of the Python algorithms, and writes only if every enforcing op allows. The reply carries per-op results, the computed TTL and the exact stored string, so the differential tests can compare everything without racing real-time expiry. Stored values are strings such as `fw:<start>:<count>`, `sw:<index>:<current>:<previous>` and `tb:<tokens %.17g>:<last>`. Every number is written with `%.17g`, because Lua's `tostring` is lossy (`1.8e15` loses digits). Loaded through redis-py `Script` objects: `EVALSHA`, with automatic reload on `NOSCRIPT`, which is tested with `SCRIPT FLUSH` on standalone Redis and on every cluster node.
 
----
+**Expiry.** Keys are written with `PX = ceil(ttl_µs / 1000) + 1`. Redis counts PX from the script's start in milliseconds, which can precede `now` by up to 1 ms, so the extra millisecond guarantees a key never expires before the model's TTL. That property is checked with `PEXPIRETIME` on Redis 7+. Expiring later is always safe, because the model's state stops mattering once its TTL has passed.
+
+**Clients and connections.**
+- Sync: `redis.Redis` / `redis.cluster.RedisCluster`, created lazily under a lock.
+- Async: `redis.asyncio` clients, one per event loop, because their connections are bound to a loop. Clients for closed loops are discarded.
+- A cold async cluster client is initialised once under a lock before concurrent use. Without this, redis-py's async cluster client raced its own topology discovery, and about 15% of a 150-request cold burst failed.
+- User-supplied clients are used as-is and never closed by UniLimit.
+- **Concurrency gate:** at most `max_connections` (default 32) script calls are in flight per process (per loop for async). Further calls wait up to `pool_timeout` (default 1 s). redis-py's default pool *raises* beyond its size; before this gate, a 400-request burst failed open for most requests *and* started the outage cooldown.
+- **Retries:** one immediate retry, on connection errors only. It recovers stale pooled connections after a Redis restart or an idle-connection drop, without failing open. Timeouts are never retried. If the server executed a script whose reply was lost, the retry consumes quota twice: conservative.
+
+**Circuit breaker.** On an outage error (connection failure, timeout, cluster down, OOM) the backend fails fast for `cooldown` (default 0.5 s). It then lets **exactly one** request probe while others keep failing fast. Any reply from Redis, including an error about one key, closes the breaker. Exhausting the local pool or gate never trips the breaker, because Redis is healthy. The breaker is tested for single-probe behaviour, cancelled probes and probes answered with errors.
+
+**Defaults:** `socket_timeout=0.5`, `socket_connect_timeout=1.0`, `max_connections=32`, `pool_timeout=1.0`, `cooldown=0.5`. These were measured under connection storms: 8–16 processes × 150 concurrent requests on one machine. Tighter timeouts produced spurious fail-open during cold-start connect storms.
+
+**Cancellation.** A cancelled task either had its script applied completely or not at all, because scripts are atomic. redis-py discards the connection, and the backend stays usable. Tests show no over-admission with a third of 200 concurrent requests cancelled.
+
+**Tested servers:** Redis 6.2.17, 7.2.7 and 8.8.0, and Valkey 8.0.2, each standalone and as a 3-primary/3-replica cluster.
 
 ## 10. Failure semantics
 
 | Error | Behaviour |
 |---|---|
-| `BackendUnavailable` (connection, timeout, cooldown) | The `fail_mode` of the rules in the batch decides:<br>• If any **enforcing** rule is `closed`, the request is rejected with reason `BACKEND_UNAVAILABLE` (HTTP 503 by default in M6).<br>• Otherwise the request is allowed with `degraded=True`.<br>Logged at WARNING. |
-| Any other backend exception, including state written by a different algorithm | Propagates (`BackendError`, or the original exception). Never swallowed, never subject to fail-open. |
+| `BackendUnavailable`: connection error, timeout, cluster down, `TRYAGAIN`, `READONLY` (failover), `OOM` (including Redis 6.2's wrapped `-OOM` inside script errors), breaker open, pool or gate exhausted | The `fail_mode` of the rules in the batch decides:<br>• If any **enforcing** rule is `closed`, the request is rejected with reason `BACKEND_UNAVAILABLE` (HTTP 503 by default in M6).<br>• Otherwise the request is allowed with `degraded=True`.<br>Logged at WARNING. `partial_commit` is preserved when the failure came after a committed cluster group. |
+| Authentication or authorisation failure (`AuthenticationError`, `NOAUTH`, `NOPERM`) | `BackendError`, **never fail-open**. redis-py classes authentication errors as connection errors; treating them as transient would silently disable limiting on a wrong password. |
+| Unreadable stored state, state from another algorithm, `WRONGTYPE`, script errors | `BackendError`; nothing is written. `Limiter.reset()` repairs a key. |
+| Timeout while a script may have run | Consumption is unknown, in every deployment mode. Failure semantics apply; the request may or may not have consumed quota. |
 | Bad configuration | `ConfigurationError` at construction time where possible; conflicting rules are detected at evaluation time. |
 | `on_missing="raise"` | `IdentityError` |
 
@@ -422,10 +436,10 @@ Custom key callables are synchronous in v0.1, for parity.
 | `unit/algorithms` | M2 | Hypothesis invariants on random schedules with a manual clock:<br>• **safety:** fixed window ≤ limit per window; sliding window has no admission once the estimate would exceed the limit; token bucket admits at most `burst + r·Δt` in any interval;<br>• rejection yields no state;<br>• `peek` agrees with `evaluate`;<br>• `retry_after` is sufficient. |
 | `conformance/` | M2 (memory), M3 (+Redis, +Cluster) | Every backend × {sync, async}: the atomic batch contract, peek purity, reset, expiry. |
 | `concurrency/` | M2 (threads/asyncio, memory), M3 (multi-process, Redis) | Exact admission count under contention. |
-| `redis/differential` | M3 | Lua equals `evaluate_batch` on random batches. |
-| `redis/failure` | M3/M6 | Real Redis behind a fault-injecting proxy. |
-| `fastapi/`, `django/` | M4/M5 | End to end. |
-| wheel install | M7 | The built wheel works with each extra. |
+| `redis_backend/test_lua_differential` | M3 | **Lua equals the Python reference** for arbitrary prior states, clocks (0 to 2^52 µs, biased to window boundaries), batches, peeks and reachable sequences. Compares results, exact stored strings and TTLs, and checks untouched keys stay byte-identical. Also covers 1,254 constructed EPS-boundary sliding-window states where a 1-ulp operation-order difference flips the decision; every fifth one runs by default. Verified to catch 8/8 injected Lua mutations, including a pure float operation-order change. |
+| `redis_backend/test_reliability` | M3 | Real processes and a fault-injecting TCP proxy: crash and restart, stale connections, idle drops, timeouts, breaker and single probe, `SCRIPT FLUSH`, malformed and mismatched state, `WRONGTYPE`, wrong password, OOM, server-clock expiry, cancellation, multiple event loops, bursts beyond the pool. |
+| `redis_backend/test_cluster` | M3 | Real 6-node cluster: slots match `CLUSTER KEYSLOT`, state lives only on the owning primary, same-identity atomicity, phase-1 rejection, deterministic injected race proving phase-2 re-evaluation and `partial_commit`, failure after commit, `SCRIPT FLUSH` on all nodes, primary crash with replica promotion (fail-open and fail-closed), cold async burst. |
+| `concurrency/test_redis_processes` | M3 | 8 spawned OS processes (half sync, half async), standalone and Cluster, all algorithms, frozen and server clocks: exact admission counts; exact consumption accounting for multi-rule batches. |
 
 **Determinism:**
 - All time-dependent tests use `ManualClock`.
@@ -458,16 +472,16 @@ Custom key callables are synchronous in v0.1, for parity.
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | Lua and Python algorithm implementations diverge | `evaluate_batch` is the oracle; differential Hypothesis tests (M3); floats written in a fixed operation order |
-| R2 | Cross-slot batches in Redis Cluster are not fully atomic | Two-phase evaluate then commit; `partial_commit` reported; opt-in single-slot mode; documented |
-| R3 | Async Redis client used across event loops | Per-loop clients (M3) |
-| R4 | Sync Redis call in an async path | Separate code paths; guard fixture (M3) |
+| R1 | Lua and Python algorithm implementations diverge | **Mitigated (M3).** Differential tests on results, stored state and TTL; constructed EPS-boundary cases; mutation-tested; ~100k deep-fuzz cases clean |
+| R2 | Cross-slot batches in Redis Cluster are not fully atomic | **Accepted.** Two-phase with per-group re-evaluation; never over-admits; `partial_commit` reported accurately (verified under contention). Under heavy contention at a limit, partial commits occur for about 4–5% of rejected requests (38–46 of 900 in our 8-process test). Prefer same-identity rule sets on Cluster where strictness matters. |
+| R3 | Async Redis client used across event loops | **Mitigated:** per-loop clients; tested with repeated `asyncio.run` |
+| R4 | Sync Redis call in an async path | **Mitigated:** separate code paths; test asserts the sync client is never created on async paths |
 | R5 | Django async `request.user` access | `auser()` (M5) |
 | R6 | DRF authenticates after middleware and decorators | `UniLimitThrottle` (M5) |
 | R7 | Starlette middleware runs before routing | Global rules match on paths (M4) |
 | R8 | FastAPI endpoints returning a `Response` directly lose dependency-set headers (confirmed in an M1 prototype) | Middleware adds the headers (M4) |
 | R9 | Proxy misconfiguration | Trust-nothing default; explicit networks only; a warning for `0.0.0.0/0` |
-| R10 | A Redis outage adds a timeout to every request | Short timeouts plus cooldown (M3) |
+| R10 | A Redis outage adds a timeout to every request | **Mitigated:** half-open breaker with a single probe. Residual: a genuine Redis stall longer than `socket_timeout` fails open for up to `cooldown`. |
 | R11 | Key cardinality explosion | TTL ≤ 2W on every key; memory `max_keys`; IPv6 /64 aggregation |
 | R12 | Hot key for a `global` rule | Documented |
 | R13 | Floating-point precision | Token-bucket representation (§7.3); EPS comparisons; validation that `W/limit ≥ 1 µs` |
@@ -476,10 +490,16 @@ Custom key callables are synchronous in v0.1, for parity.
 | R16 | Live-key eviction under `max_keys` resets counters in the memory backend | The memory backend is for development and single-process use only; documented |
 
 ---
+| R17 | Async replication: a failover can lose the most recent increments | Accepted Redis property; after failover some identities may get extra quota. `WAIT` would add latency to every request and is not used. Documented. |
+| R18 | Connection storms on cold start | Concurrency gate, smaller default pool, 1 s connect timeout; measured. Very large fleets should still warm up or size `max_connections`. |
+| R19 | Coupling to redis-py internals | Only public APIs are used (`register_script`, `Retry`, `initialize`), but the async-cluster cold-start behaviour shows redis-py changes can affect reliability. The tests run against real servers to catch this. |
+
+---
 
 ## 17. Compatibility and versioning
 
-- **Python ≥ 3.11.** The core has **no runtime dependencies.** The extras `redis`, `django`, `fastapi` and `all` are added in the milestones that implement them.
+- **Python ≥ 3.11.** The core has **no runtime dependencies.** The `redis` extra (`redis>=5.2`) exists; `django`, `fastapi` and `all` are added in the milestones that implement them.
+- **Redis servers tested:** Redis 6.2.17, 7.2.7 and 8.8.0, and Valkey 8.0.2, standalone and Cluster. Sentinel works through a user-supplied client but has no dedicated tests yet.
 - **Django ≥ 5.2**, FastAPI ≥ 0.115, Starlette ≥ 0.40, redis-py ≥ 5.0, DRF ≥ 3.15 (tested).
 - **SemVer.** The public API is `unilimit.__all__` plus the documented modules. Deprecations warn one minor release ahead. The Redis key schema is versioned separately (`v1`).
 - Hatchling build, src layout, `py.typed`, Ruff, mypy `--strict`, MIT licence.

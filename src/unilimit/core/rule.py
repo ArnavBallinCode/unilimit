@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, get_args
 
 from unilimit.algorithms import Algorithm, LimitSpec
@@ -47,6 +47,8 @@ class Rule:
     on_missing: OnMissing | None
     fail_mode: FailMode | None
     action: Action
+    spec: LimitSpec = field(repr=False, compare=False)
+    """The validated limit passed to backends (derived from rate, algorithm, burst)."""
 
     def __init__(
         self,
@@ -105,6 +107,11 @@ class Rule:
                 raise ConfigurationError(f"rule {name!r}: burst must be a positive integer")
         capacity = burst if burst is not None else parsed.limit
 
+        try:
+            spec = LimitSpec(algo, parsed.limit, parsed.window_us, capacity)
+        except ValueError as exc:
+            raise ConfigurationError(f"rule {name!r}: {exc}") from None
+
         if isinstance(cost, bool) or not (isinstance(cost, int) or callable(cost)):
             raise ConfigurationError(f"rule {name!r}: cost must be an int or a callable")
         if isinstance(cost, int) and not 1 <= cost <= capacity:
@@ -136,6 +143,7 @@ class Rule:
         object.__setattr__(self, "on_missing", on_missing)
         object.__setattr__(self, "fail_mode", fail_mode)
         object.__setattr__(self, "action", action)
+        object.__setattr__(self, "spec", spec)
 
     @property
     def limit(self) -> int:
@@ -153,7 +161,3 @@ class Rule:
     @property
     def enforced(self) -> bool:
         return self.action == "reject"
-
-    @property
-    def spec(self) -> LimitSpec:
-        return LimitSpec(self.algorithm, self.rate.limit, self.rate.window_us, self.capacity)

@@ -27,5 +27,11 @@ class BackendError(UniLimitError):
 class BackendUnavailable(BackendError):  # noqa: N818 - established public name
     """The backend is temporarily unreachable (connection, timeout, cooldown).
 
-    This is the only error to which a rule's ``fail_mode`` applies.
+    This is the only error to which a rule's ``fail_mode`` applies. ``partial_commit``
+    is True when part of a multi-slot Redis Cluster batch was already committed before
+    the failure.
     """
+
+    def __init__(self, message: str = "", *, partial_commit: bool = False) -> None:
+        super().__init__(message)
+        self.partial_commit = partial_commit

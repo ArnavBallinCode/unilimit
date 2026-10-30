@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from unilimit.algorithms import Algorithm
-from unilimit.backends.base import ConsumeOp, OpResult
+from unilimit.backends.base import Backend, ConsumeOp, OpResult
 from unilimit.backends.memory import MemoryBackend
 from unilimit.core.errors import BackendError
 from unilimit.testing import ManualClock
 
-from .drivers import BACKENDS, Driver, S, op
+from .drivers import BACKEND_KINDS, Driver, S, make_backend, op
 
 
 async def test_consume_commits_when_allowed(driver: Driver) -> None:
@@ -119,7 +121,9 @@ async def test_expiry(driver: Driver) -> None:
     assert (await driver.consume([op("a", limit=1)])).committed
 
 
-async def test_close_keeps_backend_usable_for_memory(driver: Driver) -> None:
+async def test_close_is_idempotent(driver: Driver) -> None:
+    await driver.consume([op("a")])
+    await driver.close()
     await driver.close()
 
 
@@ -155,18 +159,29 @@ def batches(draw: st.DrawFn) -> list[ConsumeOp]:
     ]
 
 
-@settings(max_examples=150)
-@given(st.lists(st.tuples(batches(), st.integers(0, 4 * S)), max_size=25))
-def test_memory_batches_are_atomic(steps: list[tuple[list[ConsumeOp], int]]) -> None:
-    """Random batches: commit iff every enforcing op allows; rejected batches change nothing."""
+@pytest.fixture(params=BACKEND_KINDS)
+def atomic_backend(request: pytest.FixtureRequest) -> Iterator[tuple[Backend, ManualClock]]:
     clock = ManualClock()
-    backend = BACKENDS["memory"](clock)
+    backend = make_backend(request.param, clock, request)
+    yield backend, clock
+    backend.close()
+
+
+@settings(max_examples=150, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(steps=st.lists(st.tuples(batches(), st.integers(0, 4 * S)), max_size=25))
+def test_batches_are_atomic(
+    atomic_backend: tuple[Backend, ManualClock], steps: list[tuple[list[ConsumeOp], int]]
+) -> None:
+    """Random batches: commit iff every enforcing op allows; rejected batches change nothing."""
+    backend, clock = atomic_backend
+    backend.reset(sorted(KEYS))
     for ops, dt in steps:
         clock.advance(us=dt)
         before = backend.peek(ops)
         batch = backend.consume(ops)
         enforcing = [r.allowed for r, o in zip(batch.results, ops, strict=True) if o.enforce]
         assert batch.committed == all(enforcing)
+        assert not batch.partial_commit  # impossible without concurrent writers
         if not batch.committed:
             assert batch.results == before
             assert backend.peek(ops) == before

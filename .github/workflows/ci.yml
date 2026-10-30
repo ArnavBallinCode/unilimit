@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UNILIMIT_REQUIRE_REDIS: "1" # a missing Redis binary fails the build instead of skipping tests
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -22,6 +25,7 @@ jobs:
       - run: uv run mypy
 
   test:
+    name: test (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -29,11 +33,51 @@ jobs:
         python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
+      - name: Install Redis (distribution package)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq redis-server
+          redis-server --version
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
       - run: uv run pytest
+
+  redis-versions:
+    name: redis (${{ matrix.server.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server:
+          - { name: redis-6.2.17, url: "https://download.redis.io/releases/redis-6.2.17.tar.gz", bin: redis-server }
+          - { name: redis-7.2.7, url: "https://download.redis.io/releases/redis-7.2.7.tar.gz", bin: redis-server }
+          - { name: redis-stable, url: "https://download.redis.io/redis-stable.tar.gz", bin: redis-server }
+          - { name: valkey-8.0.2, url: "https://github.com/valkey-io/valkey/archive/refs/tags/8.0.2.tar.gz", bin: valkey-server }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache server build
+        if: matrix.server.name != 'redis-stable'
+        uses: actions/cache@v4
+        with:
+          path: ~/servers/${{ matrix.server.name }}
+          key: server-${{ runner.os }}-${{ matrix.server.name }}
+      - name: Build ${{ matrix.server.name }}
+        run: |
+          dir=~/servers/${{ matrix.server.name }}
+          if [ ! -x "$dir/src/${{ matrix.server.bin }}" ]; then
+            mkdir -p "$dir"
+            curl -fsSL "${{ matrix.server.url }}" | tar xz -C "$dir" --strip-components 1
+            make -C "$dir" -j"$(nproc)" BUILD_TLS=no > /dev/null
+          fi
+          "$dir/src/${{ matrix.server.bin }}" --version
+          echo "UNILIMIT_REDIS_SERVER=$dir/src/${{ matrix.server.bin }}" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - run: uv run pytest tests/redis_backend tests/conformance tests/concurrency -ra
 
   wheel:
     runs-on: ubuntu-latest
@@ -43,12 +87,31 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv build
-      - name: Install the wheel into a clean environment and smoke-test it
+      - name: Core wheel works without any optional dependency
         run: |
-          uv venv /tmp/wheel-env
-          uv pip install --python /tmp/wheel-env/bin/python dist/*.whl
-          /tmp/wheel-env/bin/python -c "
+          uv venv /tmp/core-env
+          uv pip install --python /tmp/core-env/bin/python dist/*.whl
+          /tmp/core-env/bin/python -c "
           from unilimit import Limiter, Rule
           lim = Limiter.from_url('memory://', rules=[Rule('api', '2/minute')])
           assert [lim.consume('api', 'u').allowed for _ in range(3)] == [True, True, False]
+          try:
+              import unilimit.backends.redis
+          except ImportError as exc:
+              assert 'unilimit[redis]' in str(exc)
+          else:
+              raise SystemExit('redis backend imported without redis-py installed')
+          "
+      - name: Redis extra installs and talks to a real server
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq redis-server
+          uv venv /tmp/redis-env
+          uv pip install --python /tmp/redis-env/bin/python "$(ls dist/*.whl)[redis]"
+          /tmp/redis-env/bin/python -c "
+          from unilimit import Limiter, Rule
+          lim = Limiter.from_url('redis://127.0.0.1:6379/0', namespace='wheel-smoke')
+          rule = Rule('api', '2/minute')
+          lim.reset(rule, 'u')
+          assert [lim.consume(rule, 'u').allowed for _ in range(3)] == [True, True, False]
+          lim.reset(rule, 'u')
           "

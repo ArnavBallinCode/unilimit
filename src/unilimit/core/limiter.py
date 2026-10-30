@@ -31,6 +31,17 @@ from unilimit.core.policy import (
 from unilimit.core.result import Decision, RateLimitResult
 from unilimit.core.rule import FailMode, OnMissing, Rule
 
+_REDIS_OPTIONS = (
+    "cluster",
+    "socket_timeout",
+    "socket_connect_timeout",
+    "max_connections",
+    "pool_timeout",
+    "cooldown",
+    "clock",
+    "client_options",
+)
+
 
 class Limiter:
     """Entry point for rate limiting, usable from both sync and async code.
@@ -104,11 +115,28 @@ class Limiter:
     def from_url(cls, url: str, **kwargs: Any) -> Limiter:
         """Build a limiter from a backend URL.
 
-        Supported schemes: ``memory://``. Redis schemes arrive with the Redis backend.
+        Schemes: ``memory://``, ``redis://``, ``rediss://`` and ``unix://``. Backend
+        options (``cluster``, ``socket_timeout``, ``socket_connect_timeout``,
+        ``max_connections``, ``pool_timeout``, ``cooldown``, ``clock``,
+        ``client_options``) are passed to
+        the backend; every other keyword goes to :class:`Limiter`.
         """
         scheme = urlsplit(url).scheme.lower()
         if scheme == "memory":
-            return cls(MemoryBackend(), **kwargs)
+            memory_kwargs = {k: kwargs.pop(k) for k in ("clock", "max_keys") if k in kwargs}
+            redis_only = sorted(k for k in _REDIS_OPTIONS if k in kwargs and k != "clock")
+            if redis_only:
+                raise ConfigurationError(f"options {redis_only} do not apply to memory://")
+            return cls(MemoryBackend(**memory_kwargs), **kwargs)
+        if scheme in {"redis", "rediss", "unix"}:
+            try:
+                from unilimit.backends.redis import RedisBackend
+            except ImportError as exc:
+                raise ConfigurationError(
+                    'Redis URLs require redis-py: pip install "unilimit[redis]"'
+                ) from exc
+            backend_kwargs = {k: kwargs.pop(k) for k in _REDIS_OPTIONS if k in kwargs}
+            return cls(RedisBackend(url, **backend_kwargs), **kwargs)
         raise ConfigurationError(f"unsupported backend URL scheme {scheme!r}")
 
     # -- configuration -----------------------------------------------------------------
@@ -165,7 +193,9 @@ class Limiter:
         return degraded_result(rule, allowed=not closed)
 
     def _unavailable_decision(self, planned: Plan, exc: BackendUnavailable) -> Decision:
-        decision = decide_unavailable(planned, self._config.fail_mode)
+        decision = decide_unavailable(
+            planned, self._config.fail_mode, partial_commit=exc.partial_commit
+        )
         logger.warning(
             "rate limit backend unavailable; failing %s: %s",
             "open" if decision.allowed else "closed",

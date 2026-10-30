@@ -47,10 +47,14 @@ from unilimit.backends.redis import RedisBackend
 limiter = Limiter(
     backend=RedisBackend.from_url(
         "rediss://redis.internal:6379/0",
-        socket_timeout=0.25,
-        socket_connect_timeout=0.25,
-        cooldown=1.0,  # fail fast for 1s after a connection failure
-        max_connections=None,
+        cluster=False,  # True for Redis Cluster (auto-detected for supplied clients)
+        socket_timeout=0.5,
+        socket_connect_timeout=1.0,
+        max_connections=32,  # in-flight script calls per process (per event loop for async)
+        pool_timeout=1.0,  # wait this long for a free slot before BackendUnavailable
+        cooldown=0.5,  # breaker: fail fast, then let one request probe
+        clock=None,  # tests only: overrides Redis server time
+        client_options=None,  # extra keyword arguments for the redis-py clients
     ),
     namespace="unilimit",  # Redis key prefix; isolates apps sharing one Redis
     rules=(),  # named, reusable rules (registry)
@@ -71,7 +75,14 @@ limiter = Limiter(
 )
 ```
 
-`Limiter.from_url` supports `memory://` in M2, and `redis://`, `rediss://` and `unix://` from M3 onwards. An unsupported scheme raises `ConfigurationError`.
+`Limiter.from_url` supports `memory://`, `redis://`, `rediss://` and `unix://`. Backend options are separated from limiter options automatically:
+
+```python
+Limiter.from_url("redis://cache:6379/0", cluster=True, socket_timeout=0.5, namespace="api")
+Limiter.from_url("memory://", clock=ManualClock(), max_keys=10_000)
+```
+
+Redis-only options passed with `memory://`, and unsupported schemes, raise `ConfigurationError`. Redis requires the extra: `pip install "unilimit[redis]"`.
 
 Users who already manage redis-py clients (Sentinel, custom TLS, shared pools) can pass them in:
 
@@ -79,7 +90,7 @@ Users who already manage redis-py clients (Sentinel, custom TLS, shared pools) c
 RedisBackend(client=redis.Redis(...), async_client=redis.asyncio.Redis(...))
 ```
 
-Clients built from a URL are created **lazily**. The async client is created **once per event loop** (see ARCHITECTURE §9.5).
+Clients built from a URL are created **lazily**. The async client is created **once per event loop** (see ARCHITECTURE §9.5). Supplied clients are never closed by UniLimit and keep their own retry and timeout settings, so configure them for a rate limiter: short timeouts and few retries.
 
 Lifecycle:
 
@@ -233,7 +244,7 @@ class Decision:
     results: tuple[RateLimitResult, ...]
     binding: RateLimitResult | None
     degraded: bool = False
-    partial_commit: bool = False  # Redis Cluster cross-slot race only (ARCHITECTURE §6.2) [M3]
+    partial_commit: bool = False  # not admitted, yet some cluster slot groups were consumed (§6.2)
     rule: Rule | None = None  # the rule behind MISSING_IDENTITY
 
     @property

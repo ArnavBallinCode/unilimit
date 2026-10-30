@@ -1,18 +1,22 @@
 """Backend contract suite (ARCHITECTURE.md §6.2, §9.1).
 
-Every test runs against each backend through both its sync and async methods. The
-Redis backends join the parametrisation in Milestone 3.
+Every test runs against every backend (memory, standalone Redis, Redis Cluster) through
+both its sync and async methods.
 """
+
+from collections.abc import AsyncIterator
 
 import pytest
 
 from unilimit.testing import ManualClock
 
-from .drivers import BACKENDS, Driver
+from .drivers import BACKEND_KINDS, Driver, make_backend
 
 
-@pytest.fixture(params=[(b, m) for b in BACKENDS for m in ("sync", "async")], ids=str)
-def driver(request: pytest.FixtureRequest) -> Driver:
-    name, mode = request.param
+@pytest.fixture(params=[(b, m) for b in BACKEND_KINDS for m in ("sync", "async")], ids=str)
+async def driver(request: pytest.FixtureRequest) -> AsyncIterator[Driver]:
+    kind, mode = request.param
     clock = ManualClock()
-    return Driver(BACKENDS[name](clock), clock, mode)
+    d = Driver(make_backend(kind, clock, request), clock, mode)
+    yield d
+    await d.close()

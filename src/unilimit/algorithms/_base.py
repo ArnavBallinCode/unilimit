@@ -45,12 +45,36 @@ class LimitSpec:
 
     ``capacity`` is the maximum quota available at once: ``limit`` for window
     algorithms, ``burst`` (default ``limit``) for the token bucket.
+
+    Invariants (``ValueError`` otherwise): positive integers; at most one event per
+    microsecond (``window_us >= limit``); window algorithms have ``capacity == limit``;
+    and refilling a full bucket takes at most :data:`MAX_REFILL_US`. The last one keeps
+    every time value an exact integer in an IEEE double and a valid Redis TTL.
     """
 
     algorithm: Algorithm
     limit: int
     window_us: int
     capacity: int
+
+    def __post_init__(self) -> None:
+        for name in ("limit", "window_us", "capacity"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer, got {value!r}")
+        if self.window_us < self.limit:
+            raise ValueError("rate too high: more than one event per microsecond")
+        if self.algorithm is not Algorithm.TOKEN_BUCKET and self.capacity != self.limit:
+            raise ValueError("capacity must equal limit for window algorithms")
+        if self.capacity * self.window_us > MAX_REFILL_US * self.limit:
+            raise ValueError(
+                "refilling the full burst would take longer than 10 years; "
+                "reduce burst or increase the rate"
+            )
+
+
+MAX_REFILL_US = 10 * 366 * 86_400 * 1_000_000
+"""Longest supported time to refill a full token bucket (10 years, < 2**53 µs)."""
 
 
 @dataclass(frozen=True, slots=True)

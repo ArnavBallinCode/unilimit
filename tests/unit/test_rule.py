@@ -92,3 +92,24 @@ def test_static_cost_may_use_token_bucket_burst() -> None:
 
 def test_any_printable_name_is_allowed() -> None:
     assert Rule("GET /items/{id}", "1/s").name == "GET /items/{id}"
+
+
+def test_full_refill_time_is_bounded() -> None:
+    # 10 years exactly is allowed; anything longer would overflow Redis TTLs and leave
+    # the exact-integer range of IEEE doubles.
+    assert Rule("ok", "1/day", algorithm="token_bucket", burst=3660).capacity == 3660
+    with pytest.raises(ConfigurationError, match="longer than 10 years"):
+        Rule("huge", "1/day", algorithm="token_bucket", burst=3661)
+    with pytest.raises(ConfigurationError, match="longer than 10 years"):
+        Rule("absurd", limit=1, window="366d", algorithm="token_bucket", burst=291_673)
+
+
+def test_limit_spec_validates_invariants() -> None:
+    for bad in (
+        (Algorithm.FIXED_WINDOW, 0, 1_000, 0),
+        (Algorithm.FIXED_WINDOW, 2_000, 1_000, 2_000),
+        (Algorithm.SLIDING_WINDOW, 5, 1_000_000, 6),
+        (Algorithm.TOKEN_BUCKET, 1, 86_400_000_000, 10**6),
+    ):
+        with pytest.raises(ValueError, match=r"positive integer|rate too high|capacity|10 years"):
+            LimitSpec(*bad)

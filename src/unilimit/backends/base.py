@@ -45,10 +45,16 @@ class OpResult:
 
 @dataclass(frozen=True, slots=True)
 class BatchResult:
-    """``committed`` is True iff every enforcing op allowed and the writes were applied."""
+    """``committed`` is True iff every enforcing op allowed and the writes were applied.
+
+    ``partial_commit`` is True only when the batch was *not* committed but some of its
+    ops are known to have been consumed. This can only happen for Redis Cluster batches
+    whose keys span several hash slots (ARCHITECTURE.md §6.2).
+    """
 
     committed: bool
     results: tuple[OpResult, ...]
+    partial_commit: bool = False
 
 
 @dataclass(frozen=True, slots=True)

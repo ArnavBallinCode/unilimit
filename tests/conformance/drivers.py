@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+import pytest
 
 from unilimit.algorithms import Algorithm, LimitSpec
 from unilimit.backends.base import Backend, BatchResult, ConsumeOp, OpResult
@@ -44,8 +46,18 @@ class Driver:
             await self.backend.aclose()
 
 
-BackendFactory = Callable[[ManualClock], Backend]
-BACKENDS: dict[str, BackendFactory] = {"memory": lambda clock: MemoryBackend(clock=clock)}
+BACKEND_KINDS = ("memory", "redis", "cluster")
+
+
+def make_backend(kind: str, clock: ManualClock, request: pytest.FixtureRequest) -> Backend:
+    """Build a backend of ``kind`` driven by ``clock``; Redis kinds use real servers."""
+    if kind == "memory":
+        return MemoryBackend(clock=clock)
+    from unilimit.backends.redis import RedisBackend
+
+    if kind == "redis":
+        return RedisBackend(request.getfixturevalue("redis_url"), clock=clock)
+    return RedisBackend(request.getfixturevalue("cluster_url"), cluster=True, clock=clock)
 
 
 def op(
