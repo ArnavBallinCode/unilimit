@@ -1170,6 +1170,7 @@ all = [
     { name = "opentelemetry-api" },
     { name = "prometheus-client" },
     { name = "redis" },
+    { name = "starlette" },
 ]
 django = [
     { name = "django", version = "5.2.18", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1191,6 +1192,9 @@ prometheus = [
 ]
 redis = [
     { name = "redis" },
+]
+starlette = [
+    { name = "starlette" },
 ]
 
 [package.dev-dependencies]
@@ -1240,8 +1244,10 @@ requires-dist = [
     { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = ">=0.20" },
     { name = "redis", marker = "extra == 'all'", specifier = ">=5.2" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.2" },
+    { name = "starlette", marker = "extra == 'all'", specifier = ">=0.38" },
+    { name = "starlette", marker = "extra == 'starlette'", specifier = ">=0.38" },
 ]
-provides-extras = ["all", "django", "drf", "fastapi", "otel", "prometheus", "redis"]
+provides-extras = ["all", "django", "drf", "fastapi", "otel", "prometheus", "redis", "starlette"]
 
 [package.metadata.requires-dev]
 bench = [
