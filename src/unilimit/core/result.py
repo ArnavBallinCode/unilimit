@@ -33,6 +33,8 @@ class RateLimitResult:
     retry_after: float | None
     enforced: bool = True
     degraded: bool = False
+    storage_key: str | None = None
+    """Backend key of this counter. It contains only a keyed digest of the identity."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -70,8 +70,6 @@ limiter = Limiter(
     deny=None,  # AccessList(...); checked before `allow`, so deny wins
     exempt_paths=(),  # e.g. ("/health", "/metrics/*")
     exempt=None,  # Callable[[RequestContext], bool]
-    response=ResponseConfig(),  # §4  [M6]
-    hooks=(),  # §7  [M6]
 )
 ```
 
@@ -231,6 +229,7 @@ class RateLimitResult:
     retry_after: float | None  # 0.0 if allowed; None if the cost can never fit
     enforced: bool = True  # False for shadow rules (action="log")
     degraded: bool = False  # produced by fail-open/closed, not by the backend
+    storage_key: str | None = None  # backend key (contains only an identity digest)
 
 
 class Reason(StrEnum):
@@ -251,8 +250,6 @@ class Decision:
     def retry_after(self) -> float | None: ...
     @property
     def violations(self) -> tuple[RateLimitResult, ...]: ...  # shadow rules that would reject
-    def headers(self) -> dict[str, str]: ...  # [M6]
-    def response(self) -> ResponseSpec: ...  # [M6]
 ```
 
 Results never contain the raw identity value.
@@ -264,7 +261,7 @@ UniLimitError
 ├── ConfigurationError(ValueError)     bad rule/limiter config
 │   └── UnknownRuleError(LookupError)  rule name not registered
 ├── IdentityError                      on_missing="raise"
-├── RateLimitExceeded                  carries .decision; raised by integrations [M4/M5]
+├── RateLimitExceeded                  carries .decision; raised by integrations
 └── BackendError                       unexpected backend failure (bug, WRONGTYPE, script error)
     └── BackendUnavailable             connection/timeout/cooldown — subject to fail_mode
 ```
@@ -286,111 +283,107 @@ The walk goes from right to left and stops at the first untrusted hop. It runs o
 
 ---
 
-## 4. HTTP response configuration
+## 4. HTTP responses (`unilimit.http`) — implemented in M4
+
+Framework-independent; the core limiter does not depend on it.
 
 ```python
-from unilimit import ResponseConfig
+from unilimit.http import ResponseConfig, rate_limit_headers, rejection_response
 
 ResponseConfig(
-    status_code=429,
-    denied_status_code=403,
-    missing_identity_status_code=403,
-    unavailable_status_code=503,
-    body={"detail": "Too Many Requests"},  # dict | str | Callable[[Decision], dict | str]
-    legacy_headers=True,  # X-RateLimit-*
-    ietf_headers=False,  # RateLimit-Policy / RateLimit (draft-11)
-    reset_format="delta",  # "delta" | "epoch"
-    extra_headers=None,  # Callable[[Decision], Mapping[str, str]]
+    rate_limited_status=429,
+    denied_status=403,
+    missing_identity_status=403,
+    unavailable_status=503,
+    body=None,  # dict | str | Callable[[Decision], dict | str]; None = generic per reason
+    legacy_headers=True,  # X-RateLimit-Limit / -Remaining / -Reset, Retry-After on rejection
+    ietf_headers=False,  # RateLimit-Policy / RateLimit (draft-11), opt-in
+    reset_format="delta",  # "delta" (seconds) | "epoch" (Unix time)
 )
+
+rate_limit_headers(results, config, rejected=False)  # -> list[(name, value)]
+rejection_response(decision, config)  # -> ResponseSpec(status_code, headers, body, media_type)
 ```
+
+Changed from M1: response configuration is passed to the integration (`setup(app, limiter, response=...)`), not to `Limiter`, and header generation lives in this module rather than in `Decision` methods. This keeps the core free of HTTP concerns.
 
 ---
 
-## 5. FastAPI / Starlette
+## 5. FastAPI — implemented in M4
 
-### 5.1 Setup
+User guides with executable examples: [`docs/fastapi/`](docs/fastapi/quickstart.md).
 
 ```python
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+
 from unilimit import Limiter, Rule
-from unilimit.integrations.fastapi import setup
+from unilimit.integrations.fastapi import RateLimit, setup
 
-limiter = Limiter.from_url(
-    "redis://localhost:6379", global_rules=[Rule("global", rate="1000/minute", key="ip")]
-)
-
-
-@asynccontextmanager
-async def lifespan(app):
-    yield
-    await limiter.aclose()
+limiter = Limiter.from_url("redis://localhost:6379/0", global_rules=[Rule("site", "300/minute")])
+app = FastAPI()
+setup(app, limiter)  # middleware + 429 handler + client shutdown
 
 
-app = FastAPI(lifespan=lifespan)
-setup(app, limiter)  # adds the ASGI middleware, the exception handler and app.state.unilimit
+async def current_user_id() -> int | None: ...
+
+
+@app.get("/profile")
+async def profile(
+    decision=Depends(RateLimit("profile", rate="30/minute", identity=current_user_id)),
+):
+    return {"remaining": decision.results[0].remaining}
 ```
 
-`setup(app, limiter, *, middleware=True)` is the only recommended entry point. The pieces stay public for advanced use: `UniLimitMiddleware` (in `unilimit.integrations.starlette`) and `rate_limit_exceeded_handler`.
+`RateLimit` is imported from `unilimit.integrations.fastapi`, not from `unilimit`, so that importing the core never imports FastAPI.
 
-The middleware is **pure ASGI**, not `BaseHTTPMiddleware`. It has four jobs:
-- Apply global rules, matched by path, because routing has not happened yet.
-- Store the per-request evaluation state.
-- Add rate-limit headers to every response, including responses produced by route dependencies and endpoints that return a `Response` directly.
+### 5.1 `setup(app, limiter, *, response=None, close_on_shutdown=True, user=None)`
 
-**Global and route rules in one atomic batch [M4, to be verified].** Global rules are not consumed in the middleware. `setup()` also registers an app-level dependency, which runs after routing. That dependency collects the global rules together with the `RateLimit` rules declared on the matched route and evaluates them as **one** batch. The route's `RateLimit` dependencies then reuse that decision instead of consuming again.
+Installs the pure-ASGI `UniLimitMiddleware` and the `RateLimitExceeded` handler, and stores the limiter on `app.state`. The middleware:
+- applies exemptions, access lists and global rules **before routing**, so 404s count too;
+- adds rate-limit headers at the ASGI `send` level, so they reach responses that endpoints construct themselves, as well as streaming responses;
+- closes the limiter's clients on lifespan shutdown.
 
-The exception is a `RateLimit` whose `identity=` comes from another dependency. Its value is not known until that dependency runs, so it is evaluated as a **separate** atomic batch after the first. This is documented: if it rejects, the global rules have already been consumed.
+`user` resolves the user for global rules; the default is Starlette's `scope["user"]`.
 
-### 5.2 Route limits (dependency)
+### 5.2 `RateLimit` dependency
 
 ```python
-from fastapi import Depends
-from unilimit.integrations.fastapi import RateLimit
-
-@app.get("/api", dependencies=[Depends(RateLimit("100/minute", key="user"))])
-async def endpoint():
-    return {"ok": True}
-
-@app.get("/sync")                                    # sync endpoints work identically
-def sync_endpoint(_=Depends(RateLimit("10/second"))):
-    return {"ok": True}
-
-# Shared counter across routes: pass a Rule (or the same name via scope=)
-search = Rule("search", rate="30/minute", key="ip")
-@app.get("/search/a", dependencies=[Depends(RateLimit(search))])
-@app.get("/search/b", dependencies=[Depends(RateLimit(search))])
-
-# Identity from your own auth dependency — the FastAPI-native way
-@app.get("/me", dependencies=[Depends(RateLimit("60/minute", identity=get_current_user_id))])
-
-# Router-wide
-router = APIRouter(dependencies=[Depends(RateLimit("100/minute", scope="per-route"))])
+RateLimit(
+    *rules,  # "name" (inline with rate=, or registered on the Limiter) | Rule objects
+    rate=None,
+    limit=None,
+    window=None,  # inline rule definition
+    identity=None,  # a FastAPI dependency returning a user id (str | int) or None
+    key=None,  # default "user" with identity=, else "ip"
+    algorithm="sliding_window",
+    burst=None,
+    cost=1,
+    methods=None,
+    when=None,
+    on_missing=None,
+    fail_mode=None,
+    action="reject",
+    per_route=False,  # a counter per route template instead of one shared counter
+    limiter=None,  # default: the limiter installed by setup()
+)  # returns the Decision
 ```
 
-```python
-class RateLimit:
-    def __init__(
-        self,
-        rule: str | Rule,  # rate string or Rule; may be a list for multiple
-        *more: str | Rule,
-        key: KeySpec = "ip",  # used only for rate-string rules
-        identity: Callable[..., str | None] | None = None,  # a FastAPI dependency
-        scope: Literal["per-route"] | str = "per-route",
-        algorithm: Algorithm = "sliding_window",
-        cost: int | Callable[[RequestContext], int] = 1,
-        limiter: Limiter | None = None,  # default: app.state.unilimit
-    ): ...
-```
+Changed from M1: a string is a rule **name**, which mirrors `Rule(name, rate)`, rather than a rate string. Counters are shared by name; `per_route=True` replaces the M1 `scope=` option.
 
-- **Naming of rate-string rules.** With `scope="per-route"`, the rule name is derived from `METHOD + route template`, for example `GET /items/{id}`. It is stable across workers and deploys, and every `/items/1`, `/items/2`, … shares one counter. Passing `scope="name"` makes all uses of that name share a counter.
-- **Multiple rules in one dependency** (`RateLimit("10/second", "1000/day")`) are consumed atomically, all or nothing. This is the recommended way to stack limits.
-- **Rejection** raises `unilimit.integrations.fastapi.RateLimitExceeded`, a subclass of both `HTTPException` and the core `RateLimitExceeded`. It carries the correct status, `Retry-After` and `X-RateLimit-*` headers, so it works even without `setup()`. `setup()` installs a handler that renders the custom body from `ResponseConfig`.
-- **Without the middleware**, success headers are set through FastAPI's injected `Response`. This works unless the endpoint returns a `Response` object itself, a limitation verified in M1 and documented.
+`identity` is resolved by FastAPI before the limit and cached for the request. Rejections raise `RateLimitExceeded`, a subclass of both `HTTPException` and the core `RateLimitExceeded`, so they work even without `setup()`.
 
-**Decorator: not provided in v0.1.** slowapi-style decorators either require a `request` parameter in the endpoint signature or rewrite `__signature__`. Both are surprising, and dependencies already cover the use case idiomatically, including router-level application. We will revisit this only if users ask for it.
+### 5.3 Order of enforcement and duplicates
 
-**WebSockets:** the middleware can limit the `websocket` connect handshake (`websocket=True`). Per-message limits use `limiter.aconsume` directly.
+1. Middleware: exemptions, deny/allow lists, global rules.
+2. `RateLimit` dependencies in FastAPI order: app-level, router-level (outer to inner), route `dependencies=[...]`, endpoint parameters.
+
+Each step is one atomic batch. A counter (storage key) already consumed earlier in the request is skipped (`Limiter.evaluate(..., skip_keys=...)`), so overlapping policies never consume the same counter twice. A rejection ends the request; earlier steps stay consumed.
+
+Changed from M1: the M1 plan merged global and route rules into a single batch through an app-level dependency. That is impossible in general. Route rules can depend on identities produced by dependencies that run later, and a request may match no `RateLimit` at all, in which case the global rules must still be enforced before the endpoint runs. Deduplication by storage key gives the "never twice" guarantee without that coupling.
+
+**Decorator:** not provided (decision D8).
+
+**WebSockets:** passed through unchanged; use `limiter.aconsume` per message.
 
 ---
 

@@ -8,7 +8,7 @@ into a :class:`Decision`. Neither performs I/O.
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
@@ -118,9 +118,18 @@ def resolve_cost(rule: Rule, ctx: RequestContext) -> int:
     return cost
 
 
-def plan(ctx: RequestContext, rules: Sequence[Rule], config: PolicyConfig) -> Plan | Decision:
+def plan(
+    ctx: RequestContext,
+    rules: Sequence[Rule],
+    config: PolicyConfig,
+    skip_keys: Collection[str] = (),
+) -> Plan | Decision:
     """Pipeline steps 1-5 of ARCHITECTURE.md §6.1. Deterministic and side-effect free
-    apart from logging and calling user-supplied predicates."""
+    apart from logging and calling user-supplied predicates.
+
+    Counters whose storage key is in ``skip_keys`` were already consumed earlier in the
+    same request (for example by middleware) and are left out.
+    """
     if any(fnmatchcase(ctx.path, p) for p in config.exempt_paths) or (
         config.exempt is not None and config.exempt(ctx)
     ):
@@ -154,6 +163,8 @@ def plan(ctx: RequestContext, rules: Sequence[Rule], config: PolicyConfig) -> Pl
 
         digest = identity_digest(identity.kind, identity.value, config.identity_secret)
         key = rate_limit_key(config.namespace, rule.name, rule.algorithm, digest)
+        if key in skip_keys:
+            continue
         op = ConsumeOp(key, rule.spec, resolve_cost(rule, ctx), rule.enforced)
         existing = entries.get(key)
         if existing is not None:
@@ -171,7 +182,7 @@ def _seconds(us: int) -> float:
     return us / US_PER_SECOND
 
 
-def to_result(rule: Rule, result: OpResult) -> RateLimitResult:
+def to_result(rule: Rule, result: OpResult, key: str | None = None) -> RateLimitResult:
     return RateLimitResult(
         rule=rule,
         allowed=result.allowed,
@@ -180,10 +191,11 @@ def to_result(rule: Rule, result: OpResult) -> RateLimitResult:
         reset_after=_seconds(result.reset_after_us),
         retry_after=None if result.retry_after_us is None else _seconds(result.retry_after_us),
         enforced=rule.enforced,
+        storage_key=key,
     )
 
 
-def degraded_result(rule: Rule, allowed: bool) -> RateLimitResult:
+def degraded_result(rule: Rule, allowed: bool, key: str | None = None) -> RateLimitResult:
     return RateLimitResult(
         rule=rule,
         allowed=allowed,
@@ -193,6 +205,7 @@ def degraded_result(rule: Rule, allowed: bool) -> RateLimitResult:
         retry_after=None,
         enforced=rule.enforced,
         degraded=True,
+        storage_key=key,
     )
 
 
@@ -201,7 +214,7 @@ def decide(planned: Plan, batch: BatchResult) -> Decision:
     if len(batch.results) != len(planned.entries):
         raise ValueError("batch result does not match the plan")
     results = tuple(
-        to_result(e.rule, r) for e, r in zip(planned.entries, batch.results, strict=True)
+        to_result(e.rule, r, e.op.key) for e, r in zip(planned.entries, batch.results, strict=True)
     )
     if batch.committed:
         enforced = [r for r in results if r.enforced]
@@ -235,7 +248,7 @@ def decide_unavailable(
 ) -> Decision:
     """The backend was unavailable: apply each rule's fail mode (ARCHITECTURE.md §10)."""
     closed = any(e.rule.enforced and is_fail_closed(e.rule, default) for e in planned.entries)
-    results = tuple(degraded_result(e.rule, not closed) for e in planned.entries)
+    results = tuple(degraded_result(e.rule, not closed, e.op.key) for e in planned.entries)
     if closed:
         return Decision(
             allowed=False,

@@ -9,6 +9,7 @@ from unilimit.core.errors import (
     BackendUnavailable,
     ConfigurationError,
     IdentityError,
+    RateLimitExceeded,
     UniLimitError,
     UnknownRuleError,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "Limiter",
     "MemoryBackend",
     "Rate",
+    "RateLimitExceeded",
     "RateLimitResult",
     "Reason",
     "RequestContext",

@@ -69,7 +69,8 @@ jobs:
           if [ ! -x "$dir/src/${{ matrix.server.bin }}" ]; then
             mkdir -p "$dir"
             curl -fsSL "${{ matrix.server.url }}" | tar xz -C "$dir" --strip-components 1
-            make -C "$dir" -j"$(nproc)" BUILD_TLS=no BUILD_WITH_MODULES=no > /dev/null
+            # Build only the server and CLI: Redis 8+ bundles modules needing extra toolchains.
+            make -C "$dir/src" -j"$(nproc)" BUILD_TLS=no > /dev/null
           fi
           "$dir/src/${{ matrix.server.bin }}" --version
           echo "UNILIMIT_REDIS_SERVER=$dir/src/${{ matrix.server.bin }}" >> "$GITHUB_ENV"
@@ -78,6 +79,32 @@ jobs:
           python-version: "3.13"
       - run: uv sync --locked
       - run: uv run pytest tests/redis_backend tests/conformance tests/concurrency -ra
+
+  fastapi-versions:
+    name: fastapi ${{ matrix.versions.fastapi }} / starlette ${{ matrix.versions.starlette }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        versions:
+          - { fastapi: "0.115.0", starlette: "0.38.6" }
+          - { fastapi: "0.120.0", starlette: "0.48.0" }
+          - { fastapi: "0.140.0", starlette: "0.46.0" }
+          - { fastapi: "0.140.0", starlette: "1.10.0" }
+          - { fastapi: "0.162.0", starlette: "1.10.0" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Redis (distribution package)
+        run: sudo apt-get update -q && sudo apt-get install -yq redis-server
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Run the FastAPI suite against pinned versions
+        run: |
+          pins="--with fastapi==${{ matrix.versions.fastapi }} --with starlette==${{ matrix.versions.starlette }}"
+          uv run $pins python -c "import fastapi, starlette; print(fastapi.__version__, starlette.__version__)"
+          uv run $pins pytest tests/fastapi_integration tests/unit/test_http.py -ra
 
   wheel:
     runs-on: ubuntu-latest
@@ -101,6 +128,23 @@ jobs:
               assert 'unilimit[redis]' in str(exc)
           else:
               raise SystemExit('redis backend imported without redis-py installed')
+          "
+      - name: FastAPI extra installs and serves a limited app
+        run: |
+          uv venv /tmp/fastapi-env
+          uv pip install --python /tmp/fastapi-env/bin/python "$(ls dist/*.whl)[fastapi]" httpx
+          /tmp/fastapi-env/bin/python -c "
+          import asyncio, httpx
+          from fastapi import Depends, FastAPI
+          from unilimit import Limiter
+          from unilimit.integrations.fastapi import RateLimit, setup
+          app = FastAPI(); setup(app, Limiter.from_url('memory://'))
+          @app.get('/', dependencies=[Depends(RateLimit('x', rate='1/minute'))])
+          async def root(): return {}
+          async def main():
+              async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://t') as c:
+                  assert [(await c.get('/')).status_code for _ in range(2)] == [200, 429]
+          asyncio.run(main())
           "
       - name: Redis extra installs and talks to a real server
         run: |

@@ -1,6 +1,6 @@
 # UniLimit — Architecture
 
-Status: **Approved at the Milestone 1 review, with revisions (R1–R5 below). Milestones 2 and 3 are complete:** the core, the three algorithms, the memory backend and the Redis backend (standalone, Sentinel-compatible clients and Cluster; sync and async) are implemented and tested against real servers. The framework integrations (M4, M5) are not implemented yet.
+Status: **Approved at the Milestone 1 review, with revisions (R1–R5 below). Milestones 2–4 are complete:** the core, the three algorithms, the memory backend, the Redis backend (standalone, Sentinel-compatible clients and Cluster; sync and async) and the FastAPI integration are implemented and tested against real servers and real ASGI applications. The Django integration (M5) is not implemented yet.
 
 Companion document: [API_DESIGN.md](API_DESIGN.md).
 
@@ -64,9 +64,8 @@ Companion document: [API_DESIGN.md](API_DESIGN.md).
 
 ```
  ┌─────────────────────────────────────────────────────────────────────────┐
- │ Integrations (optional extras)                       [M4, M5]           │
- │   integrations/starlette.py  ASGI middleware (FastAPI reuses it)        │
- │   integrations/fastapi.py    RateLimit dependency, setup()              │
+ │ Integrations (optional extras)                    [M4 done, M5]         │
+ │   integrations/fastapi/      ASGI middleware, RateLimit, setup()        │
  │   integrations/django/       middleware (sync+async), @ratelimit, DRF   │
  │   Job: build RequestContext, call Limiter, render Decision → response   │
  └───────────────────────────────┬─────────────────────────────────────────┘
@@ -137,8 +136,11 @@ src/unilimit/
     base.py              ConsumeOp, OpResult, BatchResult, protocols, evaluate_batch()
     memory.py            MemoryBackend (both protocols)
     redis/               batch.lua, sans-I/O protocol, error mapping, backend
-  http.py, telemetry.py  [M6]
-  integrations/          [M4, M5]
+  http.py                ResponseConfig, headers, rejection responses (framework-free)
+  telemetry.py           [M6]
+  integrations/
+    fastapi/             middleware.py, dependency.py, _state.py, setup()
+    django/              [M5]
 tests/  unit/ conformance/ concurrency/  (redis/ fastapi/ django/ integration/ in later milestones)
 ```
 
@@ -409,22 +411,41 @@ HTTP bodies never include exception text (M6).
 - A peer that is not an IP address, such as a Unix socket or a test client, is used as an opaque identity. It comes from the transport, not from the client.
 - IPv4-mapped IPv6 addresses are normalised to IPv4. IPv6 addresses are aggregated to `/64` by default (`ipv6_prefix`, 1–128).
 
-### 11.2 User identity [M4/M5]
+### 11.2 User identity
 
 - **Django:** `request.user.pk` in sync code, `await request.auser()` in async code.
-- **Starlette:** `scope["user"]`.
-- **FastAPI:** `RateLimit(identity=Depends(...))`.
+- **Starlette / FastAPI global rules:** `scope["user"]` from Starlette's `AuthenticationMiddleware`, or `setup(..., user=callable)`.
+- **FastAPI route rules:** `RateLimit(identity=dependency)`. FastAPI resolves the dependency before the limit and caches it for the request.
 - **DRF:** a dedicated throttle class, because DRF authenticates after middleware and decorators run.
 
 Custom key callables are synchronous in v0.1, for parity.
 
 ---
 
-## 12. HTTP layer [M6]
+## 12. HTTP layer (`unilimit/http.py`, M4)
 
-- Default headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (delta seconds), and `Retry-After` on rejection.
-- The IETF draft-11 `RateLimit-Policy`/`RateLimit` fields are opt-in, and the `pk` parameter is never sent.
-- Configurable status codes (429 / 403 for `DENIED` / 403 for `MISSING_IDENTITY` / 503 for unavailable), body, headers and hooks.
+- Default headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (delta seconds, rounded up), and `Retry-After` on rejection (at least 1; omitted when the cost can never fit).
+- With several applicable counters (middleware plus dependencies), headers describe the binding one: the longest wait on rejection, otherwise the least remaining quota.
+- Degraded (fail-open) results produce no headers rather than invented numbers.
+- The IETF draft-11 `RateLimit-Policy`/`RateLimit` fields are opt-in; the `pk` parameter is never sent.
+- Configurable statuses (429 / 403 `DENIED` / 403 `MISSING_IDENTITY` / 503 unavailable) and bodies (dict, text or a function of the `Decision`). Bodies never contain internal errors.
+- Framework-free and outside the core limiter: integrations render `ResponseSpec` objects.
+
+### 12.1 FastAPI request flow
+
+```
+request ─► UniLimitMiddleware (before routing)
+             exemptions → deny/allow → global rules   [1 atomic batch]
+             reject → ResponseSpec sent directly
+           ─► routing ─► FastAPI dependencies (auth first, cached)
+             RateLimit #1 → RateLimit #2 …              [1 atomic batch each,
+                                                         consumed keys skipped]
+             reject → RateLimitExceeded → handler
+           ─► endpoint ─► response
+           ◄─ middleware adds X-RateLimit-* at http.response.start (if absent)
+```
+
+Request state (results, consumed storage keys) lives in `scope["state"]["unilimit"]`. All Redis I/O on this path uses the per-loop async client. Sync endpoints run in the threadpool *after* limiting, so no blocking Redis call happens on the event loop.
 
 ---
 
@@ -440,6 +461,7 @@ Custom key callables are synchronous in v0.1, for parity.
 | `redis_backend/test_reliability` | M3 | Real processes and a fault-injecting TCP proxy: crash and restart, stale connections, idle drops, timeouts, breaker and single probe, `SCRIPT FLUSH`, malformed and mismatched state, `WRONGTYPE`, wrong password, OOM, server-clock expiry, cancellation, multiple event loops, bursts beyond the pool. |
 | `redis_backend/test_cluster` | M3 | Real 6-node cluster: slots match `CLUSTER KEYSLOT`, state lives only on the owning primary, same-identity atomicity, phase-1 rejection, deterministic injected race proving phase-2 re-evaluation and `partial_commit`, failure after commit, `SCRIPT FLUSH` on all nodes, primary crash with replica promotion (fail-open and fail-closed), cold async burst. |
 | `concurrency/test_redis_processes` | M3 | 8 spawned OS processes (half sync, half async), standalone and Cluster, all algorithms, frozen and server clocks: exact admission counts; exact consumption accounting for multi-rule batches. |
+| `fastapi_integration/` | M4 | Real FastAPI apps over HTTPX/ASGI on memory, Redis and Cluster:<br>• dependency and middleware enforcement; sync and async endpoints; every response type keeps its headers;<br>• identity dependencies resolved first and called once; `on_missing`; fallback chains; custom identities; trusted proxies; Starlette auth users;<br>• named, shared and per-route rules; atomic multi-rule dependencies; precedence and no double consumption;<br>• lifespan and client ownership; several apps and event loops; no sync client on async paths;<br>• concurrency with exact counts; Redis outages with fail-open and fail-closed;<br>• real uvicorn with 3 worker processes over TCP;<br>• executable docs. |
 
 **Determinism:**
 - All time-dependent tests use `ManualClock`.
@@ -478,8 +500,8 @@ Custom key callables are synchronous in v0.1, for parity.
 | R4 | Sync Redis call in an async path | **Mitigated:** separate code paths; test asserts the sync client is never created on async paths |
 | R5 | Django async `request.user` access | `auser()` (M5) |
 | R6 | DRF authenticates after middleware and decorators | `UniLimitThrottle` (M5) |
-| R7 | Starlette middleware runs before routing | Global rules match on paths (M4) |
-| R8 | FastAPI endpoints returning a `Response` directly lose dependency-set headers (confirmed in an M1 prototype) | Middleware adds the headers (M4) |
+| R7 | Starlette middleware runs before routing | **Resolved by design:** global rules use transport and header identities or Starlette auth; user limits from FastAPI auth use `RateLimit(identity=...)` |
+| R8 | FastAPI endpoints returning a `Response` directly lose dependency-set headers | **Resolved with `setup()`:** headers are added at the ASGI level and tested for dict, model, JSON, plain, raw, streaming and 204 responses. Without the middleware the limitation remains, and is documented and tested. |
 | R9 | Proxy misconfiguration | Trust-nothing default; explicit networks only; a warning for `0.0.0.0/0` |
 | R10 | A Redis outage adds a timeout to every request | **Mitigated:** half-open breaker with a single probe. Residual: a genuine Redis stall longer than `socket_timeout` fails open for up to `cooldown`. |
 | R11 | Key cardinality explosion | TTL ≤ 2W on every key; memory `max_keys`; IPv6 /64 aggregation |
@@ -493,6 +515,9 @@ Custom key callables are synchronous in v0.1, for parity.
 | R17 | Async replication: a failover can lose the most recent increments | Accepted Redis property; after failover some identities may get extra quota. `WAIT` would add latency to every request and is not used. Documented. |
 | R18 | Connection storms on cold start | Concurrency gate, smaller default pool, 1 s connect timeout; measured. Very large fleets should still warm up or size `max_connections`. |
 | R19 | Coupling to redis-py internals | Only public APIs are used (`register_script`, `Retry`, `initialize`), but the async-cluster cold-start behaviour shows redis-py changes can affect reliability. The tests run against real servers to catch this. |
+| R20 | Global (middleware) and route (dependency) limits are separate atomic steps | A route rejection does not refund global quota (one unit per rejected request). Documented; counters are never consumed twice. A single combined batch is impossible when route identities come from later dependencies. |
+| R21 | A rule keyed `"user_or_ip"` resolves to the IP in middleware and to the user in a dependency | Two different counters, each consumed once. Documented and tested. |
+| R22 | redis-py's `RedisCluster.close()` leaves node pools connected | Worked around in `RedisBackend.close()`; regression test; per-test GC leak detection in CI |
 
 ---
 
@@ -500,6 +525,7 @@ Custom key callables are synchronous in v0.1, for parity.
 
 - **Python ≥ 3.11.** The core has **no runtime dependencies.** The `redis` extra (`redis>=5.2`) exists; `django`, `fastapi` and `all` are added in the milestones that implement them.
 - **Redis servers tested:** Redis 6.2.17, 7.2.7 and 8.8.0, and Valkey 8.0.2, standalone and Cluster. Sentinel works through a user-supplied client but has no dedicated tests yet.
-- **Django ≥ 5.2**, FastAPI ≥ 0.115, Starlette ≥ 0.40, redis-py ≥ 5.0, DRF ≥ 3.15 (tested).
+- **FastAPI ≥ 0.115** (extra `fastapi`). Tested combinations: FastAPI 0.115.0 + Starlette 0.38.6, 0.120.0 + 0.48.0, 0.140.0 + 0.46.0, 0.140.0 + 1.10.0 and 0.162.0 + 1.10.0. Starlette is not pinned separately; FastAPI's own constraint applies.
+- **Django ≥ 5.2**, redis-py ≥ 5.2, DRF ≥ 3.15 (M5).
 - **SemVer.** The public API is `unilimit.__all__` plus the documented modules. Deprecations warn one minor release ahead. The Redis key schema is versioned separately (`v1`).
 - Hatchling build, src layout, `py.typed`, Ruff, mypy `--strict`, MIT licence.

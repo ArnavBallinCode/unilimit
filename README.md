@@ -3,15 +3,33 @@
 One consistent, production-grade rate-limiting core for Django, FastAPI and plain Python.
 
 > **Status: pre-alpha, under active development. Not on PyPI yet.**
-> Implemented so far (Milestones 2–3):
+> Implemented so far (Milestones 2–4):
 > - the framework-independent core;
 > - three algorithms: fixed window, sliding window counter and token bucket;
 > - atomic multi-rule evaluation;
 > - the in-memory backend;
-> - the Redis backend (standalone and Cluster, sync and async), tested against real Redis 6.2–8.8 and Valkey 8.
+> - the Redis backend (standalone and Cluster, sync and async), tested against real Redis 6.2–8.8 and Valkey 8;
+> - the FastAPI integration (middleware, `RateLimit` dependency, headers, lifecycle): [docs/fastapi](docs/fastapi/quickstart.md).
 >
-> The Django/FastAPI integrations are not implemented yet.
+> The Django integration is not implemented yet.
 > See [ARCHITECTURE.md](ARCHITECTURE.md) and [API_DESIGN.md](API_DESIGN.md).
+
+FastAPI:
+
+```python
+from fastapi import Depends, FastAPI
+from unilimit import Limiter, Rule
+from unilimit.integrations.fastapi import RateLimit, setup
+
+app = FastAPI()
+setup(app, Limiter.from_url("redis://localhost:6379/0", global_rules=[Rule("site", "300/minute")]))
+
+
+@app.get("/search", dependencies=[Depends(RateLimit("search", rate="10/minute"))])
+async def search(): ...
+```
+
+Framework-independent:
 
 ```python
 from unilimit import Limiter, Rule

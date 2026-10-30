@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from unilimit.core.result import Decision
+
 
 class UniLimitError(Exception):
     """Base class for all UniLimit errors."""
@@ -18,6 +23,18 @@ class UnknownRuleError(ConfigurationError, LookupError):
 
 class IdentityError(UniLimitError):
     """No identity could be resolved for a rule whose ``on_missing`` is ``"raise"``."""
+
+
+class RateLimitExceeded(UniLimitError):  # noqa: N818 - established public name
+    """A request was not admitted. Raised by framework integrations.
+
+    ``decision`` explains why (rate limited, denied, missing identity or backend
+    unavailable with fail-closed).
+    """
+
+    def __init__(self, decision: Decision, message: str = "rate limit exceeded") -> None:
+        super().__init__(message)
+        self.decision = decision
 
 
 class BackendError(UniLimitError):

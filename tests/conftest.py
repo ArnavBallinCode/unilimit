@@ -69,7 +69,7 @@ def cluster_url(redis_cluster: RedisCluster) -> str:
 
 # -- deterministic leak detection ------------------------------------------------------
 
-_LEAK_CHECKED_DIRS = ("redis_backend", "conformance", "concurrency", "fastapi")
+_LEAK_CHECKED_DIRS = ("redis_backend", "conformance", "concurrency", "fastapi_integration")
 
 
 @pytest.fixture

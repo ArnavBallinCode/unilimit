@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, get_args
 from urllib.parse import urlsplit
@@ -158,6 +158,10 @@ class Limiter:
     def fail_mode(self) -> FailMode:
         return self._config.fail_mode
 
+    def get_rule(self, name: str) -> Rule:
+        """The registered rule called ``name`` (raises :class:`UnknownRuleError`)."""
+        return self._lookup(name)
+
     def _lookup(self, rule: Rule | str) -> Rule:
         if isinstance(rule, Rule):
             return rule
@@ -181,7 +185,9 @@ class Limiter:
         r = self._lookup(rule)
         return r, ConsumeOp(self.key_for(r, identity), r.spec, cost, enforce=True)
 
-    def _unavailable_result(self, rule: Rule, exc: BackendUnavailable) -> RateLimitResult:
+    def _unavailable_result(
+        self, rule: Rule, identity: str | Identity, exc: BackendUnavailable
+    ) -> RateLimitResult:
         closed = is_fail_closed(rule, self._config.fail_mode)
         logger.warning(
             "rate limit backend unavailable; failing %s for rule %r: %s",
@@ -190,7 +196,7 @@ class Limiter:
             exc,
             extra={"unilimit_rule": rule.name},
         )
-        return degraded_result(rule, allowed=not closed)
+        return degraded_result(rule, not closed, self.key_for(rule, identity))
 
     def _unavailable_decision(self, planned: Plan, exc: BackendUnavailable) -> Decision:
         decision = decide_unavailable(
@@ -222,8 +228,8 @@ class Limiter:
         try:
             batch = self.backend.consume([op])
         except BackendUnavailable as exc:
-            return self._unavailable_result(r, exc)
-        return to_result(r, batch.results[0])
+            return self._unavailable_result(r, identity, exc)
+        return to_result(r, batch.results[0], op.key)
 
     async def aconsume(
         self, rule: Rule | str, identity: str | Identity, *, cost: int = 1
@@ -232,8 +238,8 @@ class Limiter:
         try:
             batch = await self.backend.aconsume([op])
         except BackendUnavailable as exc:
-            return self._unavailable_result(r, exc)
-        return to_result(r, batch.results[0])
+            return self._unavailable_result(r, identity, exc)
+        return to_result(r, batch.results[0], op.key)
 
     def peek(self, rule: Rule | str, identity: str | Identity, *, cost: int = 1) -> RateLimitResult:
         """Evaluate without consuming. Never mutates state; never use as an admission check."""
@@ -241,8 +247,8 @@ class Limiter:
         try:
             results: tuple[OpResult, ...] = self.backend.peek([op])
         except BackendUnavailable as exc:
-            return self._unavailable_result(r, exc)
-        return to_result(r, results[0])
+            return self._unavailable_result(r, identity, exc)
+        return to_result(r, results[0], op.key)
 
     async def apeek(
         self, rule: Rule | str, identity: str | Identity, *, cost: int = 1
@@ -251,8 +257,8 @@ class Limiter:
         try:
             results = await self.backend.apeek([op])
         except BackendUnavailable as exc:
-            return self._unavailable_result(r, exc)
-        return to_result(r, results[0])
+            return self._unavailable_result(r, identity, exc)
+        return to_result(r, results[0], op.key)
 
     def reset(self, rule: Rule | str, identity: str | Identity) -> None:
         self.backend.reset([self.key_for(rule, identity)])
@@ -268,13 +274,15 @@ class Limiter:
         rules: Sequence[Rule | str] = (),
         *,
         include_global: bool = True,
+        skip_keys: Collection[str] = (),
     ) -> Decision:
         """Evaluate a request against the global rules and ``rules``.
 
         All applicable rules are consumed atomically: quota is consumed only if every
-        enforcing rule allows the request.
+        enforcing rule allows the request. Counters whose storage key is in
+        ``skip_keys`` (already consumed earlier in the same request) are left out.
         """
-        planned = plan(ctx, self._rules_for(rules, include_global), self._config)
+        planned = plan(ctx, self._rules_for(rules, include_global), self._config, skip_keys)
         if isinstance(planned, Decision):
             return planned
         if not planned.entries:
@@ -291,8 +299,9 @@ class Limiter:
         rules: Sequence[Rule | str] = (),
         *,
         include_global: bool = True,
+        skip_keys: Collection[str] = (),
     ) -> Decision:
-        planned = plan(ctx, self._rules_for(rules, include_global), self._config)
+        planned = plan(ctx, self._rules_for(rules, include_global), self._config, skip_keys)
         if isinstance(planned, Decision):
             return planned
         if not planned.entries:
