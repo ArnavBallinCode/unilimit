@@ -31,6 +31,10 @@ class Instance:
     async def ahit(self, key: str) -> bool:  # pragma: no cover - interface
         raise NotImplementedError
 
+    def pool_stats(self) -> dict[str, int] | None:
+        """Connections the client opened, if the client exposes a redis-py style pool."""
+        return None
+
     def prepare(self, keys: list[str]) -> None:
         """One-off setup for known keys, outside the measured section."""
 
@@ -62,11 +66,21 @@ class Contender:
 
 
 class UniLimit(Instance):
-    def __init__(self, url: str | None, limit: int, window: int, algorithm: str, async_: bool,
-                 observed: bool = False) -> None:  # fmt: skip
+    def __init__(
+        self,
+        url: str | None,
+        limit: int,
+        window: int,
+        algorithm: str,
+        async_: bool,
+        observed: bool = False,
+        max_connections: int | None = None,
+    ) -> None:
         from unilimit import InMemoryMetrics, Limiter, Rule
 
         kwargs: dict[str, Any] = {"observer": InMemoryMetrics()} if observed else {}
+        if max_connections is not None and url:
+            kwargs["max_connections"] = max_connections
         self.limiter = Limiter.from_url(url or "memory://", **kwargs)
         burst = limit if algorithm == TOKEN else None
         # UniLimit's "sliding_window" is a sliding window *counter* (two adjacent windows).
@@ -79,6 +93,12 @@ class UniLimit(Instance):
 
     async def ahit(self, key: str) -> bool:
         return (await self.limiter.aconsume(self.rule, key)).allowed
+
+    def pool_stats(self) -> dict[str, int] | None:
+        backend = self.limiter.backend
+        entries = list(getattr(backend, "_async", {}).values())
+        client = entries[0].client if entries else getattr(backend, "_client", None)
+        return _pool_stats(client)
 
     def close(self) -> None:
         self.limiter.close()
@@ -97,17 +117,41 @@ def _limits_item(limit: int, window: int) -> Any:
     return RateLimitItemPerSecond(limit, window)  # `window` seconds
 
 
+def _pool_stats(client: Any) -> dict[str, int] | None:
+    pool = getattr(client, "connection_pool", None)
+    if pool is None:
+        return None
+    available = len(getattr(pool, "_available_connections", ()))
+    in_use = len(getattr(pool, "_in_use_connections", ()))
+    return {"opened": available + in_use, "max": int(getattr(pool, "max_connections", 0))}
+
+
 class Limits(Instance):
     def __init__(
-        self, url: str | None, limit: int, window: int, algorithm: str, async_: bool
+        self,
+        url: str | None,
+        limit: int,
+        window: int,
+        algorithm: str,
+        async_: bool,
+        implementation: str = "coredis",
     ) -> None:
         self.is_async = async_
+        self.implementation = implementation
         self.item = _limits_item(limit, window)
         if async_:
             from limits.aio import storage as astorage
             from limits.aio import strategies as astrategies
 
-            store = astorage.RedisStorage(url) if url else astorage.MemoryStorage()
+            store = (
+                astorage.RedisStorage(
+                    url,
+                    implementation=implementation,  # type: ignore[arg-type]
+                    **({"max_connections": 1000} if implementation == "redispy" else {}),
+                )
+                if url
+                else astorage.MemoryStorage()
+            )
             cls = {
                 FIXED: astrategies.FixedWindowRateLimiter,
                 SLIDING_COUNTER: astrategies.SlidingWindowCounterRateLimiter,
@@ -131,6 +175,54 @@ class Limits(Instance):
 
     async def ahit(self, key: str) -> bool:
         return bool(await self.strategy.hit(self.item, key))  # type: ignore[misc]
+
+    def pool_stats(self) -> dict[str, int] | None:
+        if self.is_async and self.implementation != "redispy":
+            return None  # coredis pools are not redis-py pools
+        bridge = getattr(self.storage, "bridge", None)
+        client = getattr(bridge, "storage", None) or getattr(self.storage, "storage", None)
+        return _pool_stats(client)
+
+
+class RawFloor(Instance):
+    """The cheapest per-decision Redis call: `limits`' INCRBY+EXPIRE script through redis-py,
+    no rate-limiting library at all. A lower bound for any fixed-window implementation."""
+
+    LUA = (
+        'local c = redis.call("incrby", KEYS[1], tonumber(ARGV[2])) '
+        'if tonumber(c) == tonumber(ARGV[2]) then redis.call("expire", KEYS[1], ARGV[1]) end '
+        "return c"
+    )
+
+    def __init__(self, url: str, limit: int, window: int, async_: bool) -> None:
+        self.is_async = async_
+        self.window = window
+        if async_:
+            import redis.asyncio
+
+            self.client: Any = redis.asyncio.Redis.from_url(url, max_connections=1000)
+        else:
+            import redis
+
+            self.client = redis.Redis.from_url(url, max_connections=1000)
+        self.script = self.client.register_script(self.LUA)
+
+    def hit(self, key: str) -> bool:
+        return bool(self.script(keys=[key], args=[self.window, 1]))
+
+    async def ahit(self, key: str) -> bool:
+        return bool(await self.script(keys=[key], args=[self.window, 1], client=self.client))
+
+    def pool_stats(self) -> dict[str, int] | None:
+        return _pool_stats(self.client)
+
+    def close(self) -> None:
+        if not self.is_async:
+            self.client.close()
+
+    async def aclose(self) -> None:
+        if self.is_async:
+            await self.client.aclose()
 
 
 # -- PyrateLimiter ----------------------------------------------------------------------
@@ -233,11 +325,42 @@ def contenders() -> list[Contender]:
             ),
         )
 
+    def uni_pool(algorithm: str, size: int) -> Contender:
+        return Contender(
+            f"unilimit[max_connections={size}]",
+            algorithm,
+            "redis",
+            "async",
+            lambda url, limit, window: UniLimit(
+                url, limit, window, algorithm, True, max_connections=size
+            ),
+        )
+
     def lim(algorithm: str, backend: str, mode: str) -> Contender:
         return Contender(
             "limits", algorithm, backend, mode,
             lambda url, limit, window: Limits(url, limit, window, algorithm, mode == "async"),
         )  # fmt: skip
+
+    def lim_redispy(algorithm: str, mode: str) -> Contender:
+        return Contender(
+            "limits[redispy]",
+            algorithm,
+            "redis",
+            mode,
+            lambda url, limit, window: Limits(
+                url, limit, window, algorithm, mode == "async", "redispy"
+            ),
+        )
+
+    def floor(mode: str) -> Contender:
+        return Contender(
+            "raw-redis-py-floor",
+            FIXED,
+            "redis",
+            mode,
+            lambda url, limit, window: RawFloor(url or "", limit, window, mode == "async"),
+        )
 
     def pyr(algorithm: str, backend: str, mode: str) -> Contender:
         return Contender(
@@ -254,6 +377,11 @@ def contenders() -> list[Contender]:
             out.append(lim(SLIDING_COUNTER, backend, mode))
             out.append(lim(SLIDING_LOG, backend, mode))
             out.append(pyr(SLIDING_LOG, backend, mode))
+    out.append(uni_pool(FIXED, 128))
+    for mode in ("sync", "async"):
+        out.append(floor(mode))
+    for algorithm in (FIXED, SLIDING_COUNTER, SLIDING_LOG):
+        out.append(lim_redispy(algorithm, "async"))
     # PyrateLimiter token bucket: a local state bucket only (no Redis variant)
     out.append(pyr(TOKEN, "memory", "sync"))
     out.append(pyr(TOKEN, "memory", "async"))

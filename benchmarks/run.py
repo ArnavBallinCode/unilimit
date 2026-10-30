@@ -24,6 +24,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--n", type=int, default=20_000, help="decisions per measurement")
     parser.add_argument("--quick", action="store_true", help="tiny run to check the tooling")
     parser.add_argument("--only", default="", help="substring filter on contender names")
+    parser.add_argument(
+        "--concurrency",
+        default="1,32",
+        help="in-flight operations for async runs, e.g. 1,8,32,64,128",
+    )
+    parser.add_argument("--scenarios", default="allow,reject")
+    parser.add_argument(
+        "--profile-calls",
+        action="store_true",
+        help="add Python calls and retained bytes per decision",
+    )
     parser.add_argument("--redis-binary", default=None)
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
@@ -36,20 +47,24 @@ def main(argv: list[str] | None = None) -> int:
         results["environment"] = environment(server.binary, server.version())
         results["parameters"] = {"n": n, "quick": args.quick, "redis_url": "private server"}
         if "decision" in suites:
-            from benchmarks.decision import measure
+            from benchmarks.decision import measure, profile_calls
 
+            levels = tuple(int(x) for x in args.concurrency.split(","))
+            scenarios = tuple(args.scenarios.split(","))
             records = []
             for c in contenders():
                 if args.only and args.only not in c.name:
                     continue
-                for scenario in ("allow", "reject"):
-                    concurrencies = (1, 32) if c.mode == "async" else (1,)
+                for scenario in scenarios:
+                    concurrencies = levels if c.mode == "async" else (1,)
                     for concurrency in concurrencies:
                         if scenario == "reject" and concurrency != 1:
                             continue
                         rec = measure(
                             c, server if c.backend == "redis" else None, n, scenario, concurrency
                         )
+                        if args.profile_calls and scenario == "allow" and concurrency == 1:
+                            rec.update(profile_calls(c, server if c.backend == "redis" else None))
                         records.append(rec)
                         print(
                             f"{rec['contender']:55s} {scenario:6s} c={rec['concurrency']:<3d} "
