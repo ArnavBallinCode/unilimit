@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-30, M6 implemented locally (CI pending)._
+_Last updated: 2026-10-30, after Milestone 6 (observability, fallback, benchmarks)._
 
 ## Milestones
 
@@ -12,22 +12,25 @@ _Last updated: 2026-10-30, M6 implemented locally (CI pending)._
 | M4 | FastAPI integration: middleware, `RateLimit`, headers, lifecycle, docs | Done |
 | — | Prior-art adoptions: `limits` rate grammar, `WebSocketRateLimit`, HTTP-date `Retry-After` | Done |
 | M5 | Django: middleware (sync/async), `@ratelimit`, DRF throttles, `header:` keys, `ipv4_prefix`, docs | **Done**; CI green on `45f4492` |
-| M6 | Observability: events, metrics (Prometheus, OpenTelemetry), throttled failure logs, opt-in local fallback, benchmark tooling and results | **Implemented; CI not yet run** |
+| M6 | Observability: events, metrics (Prometheus, OpenTelemetry), throttled failure logs, opt-in local fallback, benchmark tooling and results | **Done**; CI green on `e26a377` (PR #2) |
 | M7 | MkDocs site, packaging, release; performance work suggested by the M6 benchmarks | Planned |
 
 Milestones start only when the maintainer asks.
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`), 18 jobs:
+GitHub Actions (`.github/workflows/ci.yml`), 19 jobs:
 - lint (Ruff and mypy);
-- tests on Python 3.11–3.14;
+- tests on Python 3.11–3.14 (1,472 tests);
 - Django 5.2–6.1 with DRF 3.16–3.18 (`django-versions` job);
 - Redis 6.2.17 / 7.2.7 / stable (8.x) / Valkey 8.0.2, built from source;
 - FastAPI 0.115–0.162 with Starlette 0.38–1.10;
 - wheel install checks.
 
-Last fully green run: commit `45f4492` (M5, PR #1): 19/19 checks. Django jobs: 188 tests each on
+Last fully green run: commit `e26a377` (M6, PR #2): 20/20 checks, 1,472 tests on Python
+3.11–3.14, Redis 6.2.17 / 7.2.7 / stable / Valkey 8.0.2, FastAPI x5, Django x3, the wheel job
+(including the `prometheus`, `otel` and `all` extras) and the benchmark-tooling smoke job.
+Before that: `45f4492` (M5, PR #1): 19/19 checks. Django jobs: 188 tests each on
 Django 5.2.18/DRF 3.16.1, 6.0.9/3.17.2 and 6.1.2/3.18.3; the wheel job installs the
 `django`, `drf` and `all` extras and runs them. Two CI-only failures of
 `test_primary_crash_and_failover` (async replication race, see `lessons.md`) were fixed on the way.
