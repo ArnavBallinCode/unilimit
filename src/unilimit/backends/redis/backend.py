@@ -366,6 +366,11 @@ class RedisBackend:
                         self._lease_script = client.register_script(LEASE_SCRIPT)
                         self._client = client
                         self._owns_client = True
+        elif self._cluster and self._probing:
+            with suppress(Exception):
+                mgr = getattr(self._client, "nodes_manager", None)
+                if mgr is not None and hasattr(mgr, "initialize"):
+                    mgr.initialize()
         return self._client, self._script
 
     def _async_entry(self) -> _AsyncEntry:
@@ -444,6 +449,11 @@ class RedisBackend:
                     if self._cluster:
                         await entry.client.initialize()
                     entry.ready = True
+        elif self._cluster and self._probing:
+            with suppress(Exception):
+                mgr = getattr(entry.client, "nodes_manager", None)
+                if mgr is not None and hasattr(mgr, "initialize"):
+                    await mgr.initialize()
         return entry
 
     # -- concurrency gate --------------------------------------------------------------

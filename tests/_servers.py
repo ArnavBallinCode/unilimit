@@ -126,7 +126,8 @@ class RedisProcess:
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def version(self) -> str:
-        info = self.client().info("server")
+        with self.client() as client:
+            info = client.info("server")
         name = "valkey" if "valkey_version" in info else "redis"
         return f"{name} {info.get('valkey_version') or info['redis_version']}"
 
@@ -182,13 +183,25 @@ class RedisCluster:
         while True:
             try:
                 live = [n for n in self.nodes if n.proc is not None]
-                infos = [n.client(socket_timeout=0.5).cluster("info") for n in live]
-                replication = [n.client(socket_timeout=0.5).info("replication") for n in live]
-                if all(i["cluster_state"] == "ok" for i in infos) and all(
-                    r["master_link_status"] == "up" for r in replication if r["role"] == "slave"
+                infos = []
+                replication = []
+                for n in live:
+                    with n.client(socket_timeout=0.5) as client:
+                        infos.append(client.cluster("info"))
+                        replication.append(client.info("replication"))
+                masters = [r for r in replication if r.get("role") == "master"]
+                slaves = [r for r in replication if r.get("role") == "slave"]
+                expected_masters = self.primaries
+                expected_slaves = self.primaries * self.replicas
+                if (
+                    len(masters) == expected_masters
+                    and len(slaves) == expected_slaves
+                    and all(int(m.get("connected_slaves", 0)) >= self.replicas for m in masters)
+                    and all(s.get("master_link_status") == "up" for s in slaves)
+                    and all(i.get("cluster_state") == "ok" for i in infos)
                 ):
                     return
-            except redis.exceptions.RedisError:
+            except (redis.exceptions.RedisError, KeyError, ValueError):
                 pass
             if time.monotonic() > deadline:
                 raise TimeoutError("cluster did not become healthy")
@@ -202,12 +215,16 @@ class RedisCluster:
             client = node.client()
             if client.info("replication")["role"] == "master":
                 out.append(client)
+            else:
+                client.close()
         return out
 
     def node_for_slot(self, slot: int) -> RedisProcess:
         """The primary currently serving ``slot`` (from CLUSTER SLOTS)."""
         live = next(n for n in self.nodes if n.proc is not None)
-        for entry in live.client().execute_command("CLUSTER", "SLOTS"):
+        with live.client() as client:
+            slots = client.execute_command("CLUSTER", "SLOTS")
+        for entry in slots:
             start, end, primary = int(entry[0]), int(entry[1]), entry[2]
             if start <= slot <= end:
                 port = int(primary[1])
@@ -216,7 +233,8 @@ class RedisCluster:
 
     def flushall(self) -> None:
         for client in self.primary_clients():
-            client.flushall()
+            with client:
+                client.flushall()
 
     def destroy(self) -> None:
         for node in self.nodes:
