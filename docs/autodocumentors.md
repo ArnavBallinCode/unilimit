@@ -15,12 +15,12 @@ Below is an evaluation of the best auto-documentation platforms for UniLimit, wi
 - **AI-Native Assistant:** Mintlify comes with a built-in AI chat search powered by LLMs that indexes your markdown files and answers developer questions directly in the docs.
 - **GitHub App Continuous Deployment:** Whenever you push to `main`, Mintlify automatically rebuilds and deploys the documentation site with zero server management.
 - **MDX & Interactive Components:** Supports interactive code tabs (showing FastAPI vs Django vs Plain Python side-by-side), callout alerts, and live API exploration.
-- **Instant Setup:** We have already added [`mint.json`](mint.json) to the repository root.
+- **Instant Setup:** We have already added [`mint.json`](../mint.json) to the repository root.
 
 ### How to Activate Mintlify (1-Click)
 1. Go to [mintlify.com/start](https://mintlify.com/start).
 2. Connect your GitHub account and select repository `ArnavBallinCode/unilimit`.
-3. Mintlify will detect [`mint.json`](mint.json) and deploy your live docs at `https://unilimit.mintlify.app` (or your custom domain like `docs.unilimit.dev`).
+3. Mintlify will detect [`mint.json`](../mint.json) and deploy your live docs at `https://unilimit.mintlify.app` (or your custom domain like `docs.unilimit.dev`).
 4. To preview locally:
    ```bash
    npm i -g mintlify
@@ -61,5 +61,5 @@ Below is an evaluation of the best auto-documentation platforms for UniLimit, wi
 ## Summary Verdict
 
 For maximizing developer adoption and AI agent indexing:
-- **Use Mintlify** for the official hosted documentation site ([`mint.json`](mint.json)).
+- **Use Mintlify** for the official hosted documentation site ([`mint.json`](../mint.json)).
 - **Keep `llms.txt` and `llms-full.txt`** at the repository root so AI agents (Cursor, Claude Code, Copilot) can ingest documentation with zero friction.
