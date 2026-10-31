@@ -27,6 +27,8 @@ remain separate steps. Its additional policy work has a cost; consult the
 
 ## Migration
 
-Use the [native FastAPI guide](../fastapi/quickstart.md) and
-[migration checklist](../migration.md#from-slowapi). The compatibility adapter does not
-implement the full SlowAPI contract, including default enforcement and success headers.
+Use the [native FastAPI guide](../fastapi/quickstart.md) for new code, or change imports
+first with the [SlowAPI adapter](../fastapi/migrating-from-slowapi.md). The adapter
+supports decorators, shared limits, exemptions, default and application limits, and
+success headers; options it cannot honour, such as `moving-window` or URL-scoped
+counters, raise an error rather than being ignored.

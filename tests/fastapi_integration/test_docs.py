@@ -37,6 +37,7 @@ async def run_page(redis_url: str) -> AsyncIterator[Any]:
     yield run
     for namespace in namespaces:  # close everything the page created
         for value in list(namespace.values()):
+            value = getattr(value, "_core_limiter", value)  # the SlowAPI adapter's limiter
             if isinstance(value, Limiter):
                 await value.aclose()
                 value.close()
@@ -56,6 +57,7 @@ def test_every_page_has_examples() -> None:
         "errors-and-headers.md",
         "identity.md",
         "middleware.md",
+        "migrating-from-slowapi.md",
         "quickstart.md",
         "redis.md",
         "websockets.md",
@@ -192,3 +194,17 @@ async def test_websockets_page(run_page: Any) -> None:
     await session.close()
     assert [r.get("text") for r in replies[:5]] == [f"echo: {i}" for i in range(5)]
     assert '"rate_limited"' in replies[5]["text"]  # the sixth message within a second
+
+
+async def test_migrating_from_slowapi_page(run_page: Any) -> None:
+    app = run_page("migrating-from-slowapi.md")["app"]
+    async with client(app) as c:
+        searches = [await c.get("/search") for _ in range(6)]
+        items = [(await c.get("/items")).status_code for _ in range(11)]
+        health = [(await c.get("/health")).status_code for _ in range(12)]
+    assert [r.status_code for r in searches] == [200] * 5 + [429]
+    assert ratelimit_headers(searches[0])["x-ratelimit-remaining"] == "4"
+    assert searches[-1].json() == {"error": "Rate limit exceeded: 5 per 1 minute"}
+    assert "retry-after" in ratelimit_headers(searches[-1])
+    assert items == [200] * 10 + [429]  # the default limit
+    assert health == [200] * 12  # exempt

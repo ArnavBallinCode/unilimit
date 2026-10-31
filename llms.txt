@@ -1,7 +1,8 @@
 # UniLimit
 
 > Python 3.11+ rate limiting for FastAPI, Starlette, Django, DRF, and plain Python.
-> Use the native integrations. Compatibility adapters implement only a subset of upstream APIs.
+> Use the native integrations for new code. Compatibility adapters for SlowAPI and
+> django-ratelimit cover their main APIs and reject options they cannot honour.
 
 ## Start here
 
@@ -10,12 +11,15 @@
 - [API reference](API_DESIGN.md): authoritative public API.
 - [Extended assistant context](llms-full.txt): semantics and a working example.
 - [Deployment](docs/deployment.md): workers, identities, outages, and shutdown.
-- [Migration boundaries](docs/migration.md): unsupported adapter behavior.
+- [Migration](docs/migration.md): adapter guides for
+  [SlowAPI](docs/fastapi/migrating-from-slowapi.md) and
+  [django-ratelimit](docs/django/migrating-from-django-ratelimit.md), with differences.
 
 ## Rules for generated code
 
 - Core memory usage: `pip install unilimit`.
 - Redis-backed FastAPI: `pip install "unilimit[fastapi,redis]"`; add an ASGI server separately.
+- Starlette without FastAPI: `"unilimit[starlette]"` and `unilimit.integrations.starlette`.
 - Redis-backed Django / DRF: `"unilimit[django,redis]"` / `"unilimit[drf,redis]"`.
 - A positional string in `RateLimit` or `ratelimit` is a rule name; inline rates use `rate=`.
 - FastAPI: call `setup(app, limiter)` for middleware and shutdown. Pass authentication

@@ -21,7 +21,7 @@ can be evaluated as a single batch, subject to the Cluster and middleware bounda
 ## Migration
 
 Use the [Django quickstart](../django/quickstart.md) for native decorators or the
-[DRF guide](../drf/quickstart.md) for token-authenticated APIs. Review algorithm, status
-code, and identity differences. The compatibility wrapper has unsupported callable-key
-and async-view paths; read [the migration guide](../migration.md#from-django-ratelimit)
-before changing imports.
+[DRF guide](../drf/quickstart.md) for token-authenticated APIs. To change imports first,
+follow the [django-ratelimit adapter guide](../django/migrating-from-django-ratelimit.md):
+it supports callable, dotted-path and accessor keys, dynamic rates, `block=False` and
+async views, and lists the algorithm, status code and identity differences.

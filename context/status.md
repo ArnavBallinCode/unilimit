@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-01, adoption documentation audit._
+_Last updated: 2026-11-01, Starlette packaging fix and compatibility adapter repair._
 
 ## Current audit
 
@@ -9,9 +9,14 @@ The CI/environment details below are historical records, not new verification of
 listed matrix. See [adoption-audit.md](adoption-audit.md) for current findings, documentation
 improvements, compatibility gaps, and candidate application integrations.
 
-Local validation for this audit: `UNILIMIT_REQUIRE_REDIS=1 uv run pytest -q` passed
-**1,576 tests** (104 seconds); Ruff, formatting, mypy, and `git diff --check` passed.
-This is local validation, not a new GitHub CI run.
+Follow-up change (unreleased): `unilimit[starlette]` works without FastAPI, and both
+compatibility adapters were rewritten with tested migration guides (see `CHANGELOG.md`
+and the 2026-11-01 entries in `decisions.md`). Local validation:
+`UNILIMIT_REQUIRE_REDIS=1 uv run pytest -q` passed **1,630 tests** (105 seconds); Ruff,
+formatting, mypy, and `git diff --check` passed. The new CI step (starlette extra alone)
+was run locally, not yet on GitHub.
+
+Previous local validation for the documentation audit: 1,576 tests.
 
 ## Milestones
 

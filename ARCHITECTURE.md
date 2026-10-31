@@ -529,6 +529,7 @@ Request state (results, consumed storage keys) lives in `scope["state"]["unilimi
 - **Python ≥ 3.11.** The core has **no runtime dependencies.** The `redis` extra (`redis>=5.2`) exists; `django`, `fastapi` and `all` are added in the milestones that implement them.
 - **Redis servers tested:** Redis 6.2.17, 7.2.7 and 8.8.0, and Valkey 8.0.2, standalone and Cluster. Sentinel works through a user-supplied client but has no dedicated tests yet.
 - **FastAPI ≥ 0.115** (extra `fastapi`). Tested combinations: FastAPI 0.115.0 + Starlette 0.38.6, 0.120.0 + 0.48.0, 0.140.0 + 0.46.0, 0.140.0 + 1.10.0 and 0.162.0 + 1.10.0. Starlette is not pinned separately; FastAPI's own constraint applies.
+- **Starlette ≥ 0.38** (extra `starlette`): `unilimit.integrations.starlette` imports nothing from FastAPI; the FastAPI integration builds on it.
 - **Django ≥ 5.2**, redis-py ≥ 5.2, DRF ≥ 3.15 (M5).
 - **SemVer.** The public API is `unilimit.__all__` plus the documented modules. Deprecations warn one minor release ahead. The Redis key schema is versioned separately (`v1`).
 - Hatchling build, src layout, `py.typed`, Ruff, mypy `--strict`, MIT licence.

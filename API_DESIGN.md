@@ -20,6 +20,7 @@ pip install "unilimit[redis]"     # + redis>=5.0
 pip install "unilimit[django]"    # + Django>=5.2
 pip install "unilimit[drf]"       # + Django>=5.2, djangorestframework>=3.16
 pip install "unilimit[fastapi]"   # + fastapi, starlette
+pip install "unilimit[starlette]" # + starlette only (middleware, WebSocket limits)
 pip install "unilimit[prometheus]" # + prometheus-client
 pip install "unilimit[otel]"      # + opentelemetry-api
 pip install "unilimit[all]"
@@ -405,6 +406,10 @@ async def chat(websocket: WebSocket):
 
 The HTTP middleware passes WebSockets through, so global rules do not apply to them.
 
+### 5.5 Starlette without FastAPI
+
+`unilimit.integrations.starlette` exports `UniLimitMiddleware`, `WebSocketRateLimit`, `WebSocketConnectionLimit` and their exceptions, and needs only `unilimit[starlette]`. The FastAPI package re-exports the same objects. Without FastAPI, `identity=` (a FastAPI dependency) raises `ConfigurationError`; pass `user_id=` to `consume()` / `manage()` instead. `RateLimitExceeded` is still importable from the Starlette package when FastAPI is installed.
+
 ---
 
 ## 6. Django and Django REST Framework — implemented in M5
@@ -538,6 +543,13 @@ limiter.fallback_active  # bool
 | django-ratelimit `@ratelimit(key="user_or_ip", rate="10/m", block=True)` | `@ratelimit("10/minute", key="user_or_ip")` (blocking is the default; use `action="log"` for `block=False`-style observation) |
 | django-ratelimit `group="x"` | `scope="x"` |
 | DRF `UserRateThrottle` with `"100/day"` | `UniLimitThrottle` + `unilimit_rules=[Rule("x", rate="100/day", key="user")]` |
+
+### 8.1 Compatibility adapters
+
+For migrating without rewriting decorators. Each accepts the upstream arguments it can honour, raises `ConfigurationError` at import time for those it cannot, and documents every behavioural difference.
+
+- `unilimit.compat.slowapi`: `Limiter(key_func, default_limits, application_limits, headers_enabled, strategy, storage_uri, storage_options, *, in_memory_fallback_enabled, retry_after, enabled, key_style="endpoint", limiter=None, **from_url_options)` with `limit`, `shared_limit` and `exempt`; `SlowAPIMiddleware` (= `SlowAPIASGIMiddleware`, pure ASGI) for default and application limits; `RateLimitExceeded` (a Starlette `HTTPException`); `_rate_limit_exceeded_handler`; `get_remote_address` (mapped to the `"ip"` key). Stacked limits on one endpoint are one atomic batch. Guide: [migrating-from-slowapi.md](docs/fastapi/migrating-from-slowapi.md).
+- `unilimit.compat.django_ratelimit`: `ratelimit(group=None, key="ip", rate=..., method=ALL, block=True)`, `ALL`, `UNSAFE`, `Ratelimited`. Built on the native decorator; every rate has its own counter `"{group}:{rate}"`. Guide: [migrating-from-django-ratelimit.md](docs/django/migrating-from-django-ratelimit.md).
 
 ---
 

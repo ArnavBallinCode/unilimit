@@ -43,19 +43,21 @@ sync/async parity, sans-I/O policy.
 | `cost` (weighted requests), `exempt_when` | slowapi | `Rule.cost`, `Rule.when` | |
 | `block=False` | django-ratelimit | `Rule(action="log")` (shadow mode) | |
 | `Retry-After` as an HTTP date | slowapi (`retry_after="http-date"`) | `ResponseConfig.retry_after_format` | |
-| WebSocket limiter | fastapi-limiter (`WebSocketRateLimiter`) | `integrations/fastapi/websocket.py` | **Improvement:** limits both the handshake (close 1008) and messages, with atomic multi-rate rules |
+| WebSocket limiter | fastapi-limiter (`WebSocketRateLimiter`) | `integrations/starlette/websocket.py` | **Improvement:** limits both the handshake (close 1008) and messages, with atomic multi-rate rules |
 | Dependency-based FastAPI API | fastapi-limiter | `RateLimit` | **Improvement:** `identity=` dependencies, dedupe with middleware |
 | `in_memory_fallback` | slowapi | `Limiter(fallback=)` | Idea only, no code copied. **Improvements:** explicit, never silent (events, logs, `Decision.fallback`), only for fail-open rules so it never loosens fail-closed, sync and async, defined recovery semantics |
 | `@ratelimit` view decorator, `key="header:X-Name"`, `IPV4_MASK`, `method=` filter | django-ratelimit | `integrations/django/decorators.py`, `core/identity.py`, `Limiter(ipv4_prefix=)` | Idea only, no code copied. **Improvements:** several rules per view in one atomic batch, async views without blocking, rate not part of the storage key, trusted-proxy IPs instead of `REMOTE_ADDR`/first `X-Forwarded-For` |
 | Throttle classes keyed by scope with `DEFAULT_THROTTLE_RATES` | Django REST framework (BSD-3-Clause) | `integrations/drf/throttling.py` | Interface and settings conventions only, so migration is a class swap. **Improvements:** exact across processes, one atomic batch per view, refuses double counting |
+| SlowAPI's public API (`Limiter` options, `limit`, `shared_limit`, `exempt`, `SlowAPIMiddleware`, the 429 handler and its `"5 per 1 minute"` wording) | slowapi | `compat/slowapi.py` | Interface only, re-implemented on `Limiter.evaluate`; no code copied. **Improvements:** stacked limits atomic, async I/O, per-endpoint counters, unsupported options raise |
+| django-ratelimit's decorator API (`group`/`key`/`rate`/`method`/`block`, accessor and dotted-path keys, callable rates, default group names, rate grammar, `ALL`/`UNSAFE`) | django-ratelimit | `compat/django_ratelimit.py` | Interface only, re-implemented on the native decorator; no code copied. **Improvements:** async views, trusted-proxy IPs. Rate in the rule name is kept here on purpose (see decisions.md) |
 
 ## Planned adoptions
 
 | What | From | Milestone | Design notes |
 |---|---|---|---|
-| `query:<param>`, `post:<field>` key sources | django-ratelimit | Later | Callable keys cover them today; `post:` needs body parsing |
+| `query:<param>`, `post:<field>` key sources | django-ratelimit | Later | Callable keys cover them today; `post:` needs body parsing. The django-ratelimit adapter has `get:`/`post:` |
 | Response-based deduction (count only failed logins) | Flask-Limiter (`deduct_when`) | Later | Needs check-before / consume-after semantics; design carefully against atomicity |
-| Global enable switch | slowapi (`enabled=`) | M6 | For tests and incidents |
+| Global enable switch | slowapi (`enabled=`) | M6 | For tests and incidents. The SlowAPI adapter has `enabled` |
 
 ## Deliberately not adopted
 
@@ -64,5 +66,5 @@ sync/async parity, sans-I/O policy.
 | Trusting the first `X-Forwarded-For` entry (fastapi-limiter default, slowapi `get_ipaddr`) | Spoofable; UniLimit walks right to left through `TrustedProxies` |
 | Sequential per-limit hits | Not atomic; earlier limits stay consumed on rejection |
 | Sync storage calls from async endpoints | Blocks the event loop |
-| Rate inside the storage key (django-ratelimit) | Changing a limit silently resets every counter |
-| `override_defaults` (route limits replace global ones) | Global and route rules are separate, additive steps by design |
+| Rate inside the storage key (django-ratelimit) | Changing a limit silently resets every counter. The compatibility adapters keep it to match upstream counting |
+| `override_defaults` (route limits replace global ones) | Global and route rules are separate, additive steps by design. Only the SlowAPI adapter's `default_limits` follow it |

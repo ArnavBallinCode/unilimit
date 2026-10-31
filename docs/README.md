@@ -9,7 +9,10 @@ New to backend development? Read [the concepts guide](concepts.md) first.
 - [Django](django/quickstart.md): settings, middleware, and view decorators.
 - [Django REST Framework](drf/quickstart.md): authenticated throttle scopes.
 - [WebSockets](fastapi/websockets.md): message budgets and connection leases.
-- [Migration](migration.md): native APIs and compatibility adapter limitations.
+- [Migration](migration.md): from SlowAPI ([guide](fastapi/migrating-from-slowapi.md)),
+  django-ratelimit ([guide](django/migrating-from-django-ratelimit.md)), DRF and others.
+- Starlette without FastAPI: install `"unilimit[starlette]"` and use
+  `unilimit.integrations.starlette` (middleware and WebSocket limits).
 
 ## Operate it
 

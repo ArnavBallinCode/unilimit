@@ -159,3 +159,20 @@ decision needs the maintainer's agreement and a new entry here.
   examples run against isolated Redis. Local link checks cover user docs as well as context.
 - This change does not alter public enforcement APIs or publish/deploy a service. See
   [the audit](adoption-audit.md) for evidence and remaining product work.
+
+## Starlette packaging and adapter repair (2026-11-01)
+
+| Decision | Rationale |
+|---|---|
+| Starlette-only modules (`_state`, `_policies`, `middleware`, `websocket`) live in `integrations/starlette/`; `integrations/fastapi/` keeps `RateLimit`, `RateLimitExceeded` and `setup`, and re-exports the rest | `unilimit[starlette]` must work without FastAPI (it did not); FastAPI builds on Starlette, not the reverse. Old import paths keep working |
+| `identity=` imports FastAPI lazily and raises `ConfigurationError` without it; `unilimit.integrations.starlette.RateLimitExceeded` is a lazy attribute | Keeps the Starlette import FastAPI-free without breaking existing imports |
+| Adapters honour an upstream option or raise `ConfigurationError` at import; none is accepted and ignored | A migrated limit that silently does nothing is worse than an error (D4 spirit) |
+| SlowAPI adapter: stacked `limit` decorators on one endpoint are one atomic batch; `default_limits`/`application_limits` are a separate step in `SlowAPIMiddleware` | Atomic batches (invariant 1) where the adapter controls the whole set; same stage split as native middleware vs dependencies |
+| SlowAPI adapter keeps upstream's `default_limits` semantics (only endpoints without their own limit, unless `override_defaults=False`), unlike native `global_rules` | It is a compatibility layer: migrated apps must keep their limits. Native code stays additive |
+| SlowAPI adapter counts per endpoint and rejects `key_style="url"`; rejects `moving-window`; empty keys are denied (403), not skipped | Per-URL counters and skipped keys let clients avoid limits; no moving-window algorithm exists |
+| SlowAPI adapter maps `get_remote_address` to the `"ip"` key; `get_ipaddr` is not provided | Trusted proxies and IPv6 /64 grouping instead of trusting `X-Forwarded-For` |
+| SlowAPI adapter `RateLimitExceeded` subclasses Starlette's `HTTPException` (was FastAPI's) and carries status and headers | Works in Starlette-only apps; FastAPI handles Starlette's exception natively |
+| Adapter rule names include the rate (`"{endpoint}:{rate}"`, `"{group}:{rate}"`) | Upstream counts each rate separately and stacking decorators with one group is documented upstream. This is the adapters' exception to "rate not in the storage key" (prior-art.md); native rules are unchanged |
+| django-ratelimit adapter reads rates with upstream's grammar (first letter of the period) | Same reasoning as DRF rates (M5): migrated values keep their meaning |
+| django-ratelimit adapter answers blocked requests with the native rejection response (429 / `REJECTION_VIEW`), not `Ratelimited` (403) | One rejection path and the correct status; `Ratelimited` stays importable |
+| django-ratelimit adapter: `rate=` is required; a callable rate returning `None` leaves that request unlimited; empty key values are one shared bucket; `empty_to` removed | Upstream semantics where safe; a static missing rate is a configuration error, and `empty_to` never did anything |

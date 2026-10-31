@@ -68,6 +68,8 @@
       "pages": [
         "docs/comparisons/README",
         "docs/migration",
+        "docs/fastapi/migrating-from-slowapi",
+        "docs/django/migrating-from-django-ratelimit",
         "docs/comparisons/slowapi-vs-unilimit",
         "docs/comparisons/django-ratelimit-vs-unilimit",
         "docs/comparisons/limits-vs-unilimit",

@@ -39,15 +39,15 @@ from starlette.requests import Request
 from unilimit.core.errors import ConfigurationError
 from unilimit.core.limiter import Limiter
 from unilimit.http import ResponseConfig
-from unilimit.integrations.fastapi._state import RequestState, UserResolver
 from unilimit.integrations.fastapi.dependency import (
     APP_STATE_LIMITER,
     APP_STATE_RESPONSE,
     RateLimit,
     RateLimitExceeded,
 )
-from unilimit.integrations.fastapi.middleware import UniLimitMiddleware
-from unilimit.integrations.fastapi.websocket import (
+from unilimit.integrations.starlette._state import RequestState, UserResolver
+from unilimit.integrations.starlette.middleware import UniLimitMiddleware
+from unilimit.integrations.starlette.websocket import (
     WebSocketConnectionLimit,
     WebSocketConnectionLimitExceeded,
     WebSocketLease,

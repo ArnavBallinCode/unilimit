@@ -70,9 +70,12 @@ Choose `fail_mode="closed"` when availability must yield to enforcement, and rea
 - **DRF:** install `"unilimit[drf,redis]"`; follow the
   [throttle and rate settings guide](docs/drf/quickstart.md). Throttles run after DRF
   authentication; configure `DEFAULT_THROTTLE_RATES` for named scopes.
-- **Starlette:** install `"unilimit[starlette,redis]"`; use the ASGI middleware and
-  WebSocket helpers from `unilimit.integrations.starlette`.
+- **Starlette:** install `"unilimit[starlette,redis]"` (FastAPI is not needed); use the
+  ASGI middleware and WebSocket helpers from `unilimit.integrations.starlette`.
 - **Plain Python:** install `unilimit`; use the example below.
+- **Coming from SlowAPI or django-ratelimit?** Change the imports first with the
+  [SlowAPI](docs/fastapi/migrating-from-slowapi.md) or
+  [django-ratelimit](docs/django/migrating-from-django-ratelimit.md) adapter guide.
 
 ```python
 from unilimit import Limiter, MemoryBackend, Rule
@@ -106,8 +109,9 @@ logs of every request. Rate limiting does not replace authentication or edge DDo
 
 UniLimit is a young project. The [published benchmarks](docs/observability/benchmarks.md)
 include workloads where it is slower than `limits`; there is no blanket speed advantage.
-Compatibility adapters implement only a subset of upstream APIs: read the
-[migration boundaries](docs/migration.md) before switching imports.
+Compatibility adapters accept the upstream options they can honour, reject the rest, and
+list their differences: read the [migration guide](docs/migration.md) before switching
+imports.
 
 ## Contributing
 

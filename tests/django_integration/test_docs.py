@@ -67,6 +67,7 @@ def test_every_page_has_examples() -> None:
         "django/decorators.md",
         "django/errors-and-headers.md",
         "django/middleware.md",
+        "django/migrating-from-django-ratelimit.md",
         "django/quickstart.md",
         "django/redis.md",
         "django/versions.md",
@@ -186,3 +187,20 @@ def test_drf_migration(serve: Any) -> None:
     serve("drf/migration.md")
     client = wsgi()
     assert [client.get("/contacts").status_code for _ in range(21)] == [200] * 20 + [429]
+
+
+@pytest.mark.django_db
+def test_migrating_from_django_ratelimit_page(serve: Any) -> None:
+    serve("django/migrating-from-django-ratelimit.md")
+    client = wsgi()
+    searches = [client.get("/search") for _ in range(6)]
+    assert [r.status_code for r in searches] == [200] * 5 + [429]
+    assert "retry-after" in ratelimit_headers(searches[-1])
+    staff = wsgi()
+    staff.force_login(User.objects.create_user("staff", is_staff=True))
+    assert [staff.get("/search").status_code for _ in range(7)] == [200] * 7  # rate None
+    assert [client.get("/submit").status_code for _ in range(3)] == [200] * 3  # GET: safe
+    assert client.post("/submit").status_code == 200
+    comments = [client.get("/comment") for _ in range(4)]
+    assert [r.status_code for r in comments] == [200, 200, 200, 400]  # block=False
+    assert comments[-1].json() == {"error": "slow down"}

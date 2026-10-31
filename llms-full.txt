@@ -39,7 +39,8 @@ framework-free. Close clients at shutdown using the integration lifecycle or `cl
 Atomicity covers memory, standalone Redis, and one Cluster slot. Cross-slot Cluster
 batches can report `partial_commit`. Middleware and endpoint rules are separate steps,
 with consumed storage keys skipped to prevent duplicate consumption. A route rejection
-does not refund global quota. Separate compatibility decorators are not one batch.
+does not refund global quota. SlowAPI-adapter middleware limits and decorator limits are
+also separate steps.
 
 Only `BackendUnavailable` follows `fail_mode`. The default is open. Auth errors and
 corrupt state raise. Local fallback is opt-in, applies only to fail-open rules, and is
@@ -70,6 +71,9 @@ raw identities. Rotating the secret changes keys and resets effective quotas.
 
 ## Limits of compatibility
 
-See [migration](docs/migration.md). The SlowAPI adapter does not enforce `default_limits`
-or produce success headers from `headers_enabled`. The Django adapter does not support
-callable keys or async views correctly. Prefer native APIs and test behavior end-to-end.
+See [migration](docs/migration.md). `unilimit.compat.slowapi` and
+`unilimit.compat.django_ratelimit` accept the upstream options they can honour and raise
+`ConfigurationError` for the rest; each guide
+([SlowAPI](docs/fastapi/migrating-from-slowapi.md),
+[django-ratelimit](docs/django/migrating-from-django-ratelimit.md)) lists the behavioural
+differences. Prefer native APIs for new code and test behavior end-to-end.

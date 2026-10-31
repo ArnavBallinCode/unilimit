@@ -186,6 +186,32 @@ jobs:
                   assert [(await c.get('/')).status_code for _ in range(2)] == [200, 429]
           asyncio.run(main())
           "
+      - name: Starlette extra works without FastAPI
+        run: |
+          uv venv /tmp/starlette-env
+          uv pip install --python /tmp/starlette-env/bin/python "$(ls dist/*.whl)[starlette]" httpx
+          /tmp/starlette-env/bin/python -c "
+          import asyncio, httpx
+          from starlette.applications import Starlette
+          from starlette.middleware import Middleware
+          from starlette.responses import PlainTextResponse
+          from starlette.routing import Route
+          from unilimit import Limiter, Rule
+          from unilimit.integrations.starlette import UniLimitMiddleware
+          lim = Limiter.from_url('memory://', global_rules=[Rule('x', '1/minute')])
+          async def root(request): return PlainTextResponse('ok')
+          app = Starlette(routes=[Route('/', root)], middleware=[Middleware(UniLimitMiddleware, limiter=lim)])
+          async def main():
+              async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://t') as c:
+                  assert [(await c.get('/')).status_code for _ in range(2)] == [200, 429]
+          asyncio.run(main())
+          try:
+              import fastapi
+          except ImportError:
+              pass
+          else:
+              raise SystemExit('the starlette extra pulled in FastAPI')
+          "
       - name: Django and DRF extras install independently
         run: |
           uv venv /tmp/django-env

@@ -48,11 +48,15 @@ No upstream code was copied or new algorithm adopted.
 
 ## Product work to prioritize next
 
-1. **Repair compatibility contracts before promoting adapters.** SlowAPI `default_limits`
-   and `headers_enabled` are accepted but not enforced; missing Request arguments skip
-   limiting. Django callable keys return no identity and its adapter is not async-aware.
-   Add explicit supported-option validation and regression tests before broad migration
-   claims. Current documentation clearly identifies these limitations.
+1. **Repair compatibility contracts before promoting adapters.** *Done (same day, follow-up
+   change).* Both adapters were rewritten: every accepted option is implemented and tested
+   or raises `ConfigurationError`, and tested migration guides were added
+   ([SlowAPI](../docs/fastapi/migrating-from-slowapi.md),
+   [django-ratelimit](../docs/django/migrating-from-django-ratelimit.md)). The same change
+   fixed `unilimit[starlette]`, which could not import without FastAPI. Not yet done:
+   a differential run against the real upstream libraries (SlowAPI is in the `bench`
+   dependency group; django-ratelimit is not installed anywhere) to confirm counting and
+   status codes side by side.
 2. **One real application integration.** Measure application latency and rejection behavior
    under representative load, including outages and multiple workers. Publish a reproducible
    case study only after collecting data and obtaining the application's agreement.

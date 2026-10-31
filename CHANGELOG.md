@@ -8,15 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`unilimit[starlette]` without FastAPI.** `unilimit.integrations.starlette` imported
+  the FastAPI package and failed with `ImportError` unless FastAPI was installed. The
+  Starlette-only modules now live in `unilimit.integrations.starlette`; the FastAPI
+  package re-exports them, so existing imports keep working. CI installs the
+  `starlette` extra alone.
+- **SlowAPI adapter (`unilimit.compat.slowapi`).** `default_limits` and
+  `application_limits` are enforced by the new `SlowAPIMiddleware` /
+  `SlowAPIASGIMiddleware`; `headers_enabled` adds `X-RateLimit-*` headers; `exempt`,
+  `shared_limit`, `per_method`, `error_message`, `exempt_when`, callable `cost` and
+  callable limit values (per request) work; `enabled`, `strategy`, `retry_after`,
+  `storage_options` and `in_memory_fallback_enabled` are honoured. An endpoint without a
+  `request` parameter now fails at import instead of silently going unlimited. Stacked
+  limits on one endpoint and multi-rate strings are one atomic batch.
+- **django-ratelimit adapter (`unilimit.compat.django_ratelimit`).** Callable and
+  dotted-path keys, `get:`/`post:`/`header:` keys (empty values share one bucket, as
+  upstream), callable, dotted-path and tuple rates (a `None` rate leaves the request
+  unlimited), `ALL`/`UNSAFE`, `request.limited` across stacked decorators, upstream
+  default group names and rate grammar, async views and async class-based views.
+  Stacked decorators with one group but different rates no longer share a counter.
+
+### Changed
+
+- SlowAPI adapter: `headers_enabled` defaults to `False`, as in SlowAPI.
+  `RateLimitExceeded` is a Starlette `HTTPException` and carries the status (429, 403 for
+  a missing key, 503 when failing closed) and headers. `limit()` takes SlowAPI's
+  positional order. Unsupported options (`moving-window`, `key_style="url"`,
+  `swallow_errors`, `in_memory_fallback`, `key_prefix`, `auto_check`, `config_filename`)
+  raise `ConfigurationError` instead of being ignored. The 429 body reads
+  `"Rate limit exceeded: 5 per 1 minute"`.
+- Both adapters name counters `"{endpoint or group}:{rate}"`; counters stored by 0.1.1
+  adapters start fresh.
+- django-ratelimit adapter: `rate=` is required (it defaulted to `10/minute`), and the
+  unused `empty_to` argument is removed.
+
 ### Documentation and adoption
 
+- Tested migration guides: [from SlowAPI](docs/fastapi/migrating-from-slowapi.md) and
+  [from django-ratelimit](docs/django/migrating-from-django-ratelimit.md), each listing
+  supported options and behavioural differences.
 - Added a tested, Redis-free README quickstart, beginner concepts, deployment and
   migration guides, a documentation index, and contribution/issue-report guidance.
 - Corrected Redis installation instructions, `identity_secret` configuration, BLAKE2b
   digest descriptions, and atomicity/privacy claims. Added executable public-example
   coverage and documentation-wide local-link/navigation checks.
 - Replaced unsupported competitor claims with dated upstream sources. Compatibility
-  adapters are partial; see [migration limitations](docs/migration.md).
+  adapter differences are listed in [the migration guide](docs/migration.md).
 - Corrected assistant context and removed missing asset/page references from documentation
   navigation. Hosted documentation deployment remains unverified.
 

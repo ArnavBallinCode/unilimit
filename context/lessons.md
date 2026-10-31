@@ -81,6 +81,25 @@ surprises you.
 - `starlette.testclient` is deprecated with httpx and warns (an error under our
   settings). → Use `httpx.AsyncClient(transport=ASGITransport(app))`, and a small ASGI
   driver for WebSockets.
+- **Importing a submodule runs its package's `__init__`.** `unilimit.integrations.starlette`
+  imported `unilimit.integrations.fastapi.middleware`, and that package's `__init__`
+  imports FastAPI, so `pip install "unilimit[starlette]"` could not import the Starlette
+  integration. Every test environment had FastAPI, so nothing failed. → Starlette-only
+  modules live in `integrations/starlette/` and FastAPI re-exports them;
+  `test_starlette_integration_does_not_need_fastapi` blocks `fastapi` in a subprocess and
+  the CI wheel job installs the `starlette` extra alone.
+
+## Compatibility adapters
+
+- **Two rules with one name but different rates share a counter**: the storage key is
+  name, algorithm and identity, so a `5/m` rule and a `100/h` rule read and write the same
+  state. The first django-ratelimit adapter named rules after the group only, so the
+  documented upstream pattern of stacking decorators on one view was wrong, and a plain
+  `[200, 200, 429]` test still passed. → Adapter rule names include the rate, and
+  `test_stacked_decorators_are_independent_limits` checks each counter with `peek`.
+- **Placeholders hide as features.** The 0.1.1 adapters accepted `default_limits`,
+  `headers_enabled`, callable keys and `**backend_options` and silently ignored them. →
+  Every accepted option is implemented and tested, or raises `ConfigurationError`.
 
 ## Test infrastructure
 

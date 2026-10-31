@@ -12,6 +12,7 @@ install: upstream implementations and APIs change.
 UniLimit is worth evaluating when you need consistent framework APIs, explicit identity
 and outage policies, or multiple rules consumed together. Batch atomicity covers memory,
 standalone Redis, and a single Cluster slot. Cross-slot batches may partially consume;
-middleware and endpoint stages are separate batches. Its compatibility adapters are
-[limited](../migration.md), and [benchmarks](../observability/benchmarks.md) show workloads
-where `limits` is faster. Choose on measured behavior and integration needs.
+middleware and endpoint stages are separate batches. Its compatibility adapters cover
+the main SlowAPI and django-ratelimit APIs, reject the options they cannot honour, and
+[document their differences](../migration.md); [benchmarks](../observability/benchmarks.md)
+show workloads where `limits` is faster. Choose on measured behavior and integration needs.

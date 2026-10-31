@@ -4,7 +4,7 @@
 
 ```
 framework request
-  └─ integration builds RequestContext            integrations/fastapi/_state.py
+  └─ integration builds RequestContext            integrations/starlette/_state.py
        └─ Limiter.evaluate / aevaluate            core/limiter.py
             ├─ policy.plan(ctx, rules, config)    core/policy.py      (pure)
             │    exemptions → deny → allow → select rules → resolve identity
@@ -42,10 +42,13 @@ pure `plan` and `decide`.
 | `backends/redis/backend.py` | `RedisBackend`: clients (per-loop async), concurrency gate, circuit breaker, cluster two-phase | Most operational logic |
 | `http.py` | `ResponseConfig`, `rate_limit_headers`, `rejection_response`, `ResponseSpec` | Framework-free |
 | `integrations/fastapi/__init__.py` | `setup()`, exception handler, exports | |
-| `integrations/fastapi/middleware.py` | Pure ASGI middleware: global rules, headers at `send`, lifespan close | Not `BaseHTTPMiddleware` |
-| `integrations/fastapi/dependency.py` | `Policies` base, `RateLimit`, `RateLimitExceeded` | Injects `identity=` via `__signature__` |
-| `integrations/fastapi/websocket.py` | `WebSocketRateLimit` | Handshake close 1008; `consume()` per message |
-| `integrations/fastapi/_state.py` | Request-scoped state in `scope["state"]["unilimit"]`, context building | |
+| `integrations/fastapi/dependency.py` | `RateLimit`, `RateLimitExceeded` | The only modules importing FastAPI |
+| `integrations/fastapi/middleware.py`, `websocket.py` | Re-exports from `integrations/starlette/` | Keep old import paths working |
+| `integrations/starlette/middleware.py` | Pure ASGI middleware: global rules, headers at `send`, lifespan close | Not `BaseHTTPMiddleware` |
+| `integrations/starlette/_policies.py` | `Policies` base (shared by `RateLimit` and `WebSocketRateLimit`), app-state names | Injects `identity=` via `__signature__`; imports FastAPI only for `identity=` |
+| `integrations/starlette/websocket.py` | `WebSocketRateLimit`, `WebSocketConnectionLimit`, leases | Handshake close 1008; `consume()` per message |
+| `integrations/starlette/_state.py` | Request-scoped state in `scope["state"]["unilimit"]`, context building | |
+| `integrations/starlette/__init__.py` | Starlette exports; needs only `unilimit[starlette]` | `RateLimitExceeded` loaded lazily (FastAPI) |
 | `integrations/_common.py` | `RequestState`, `build_rules`, `resolve_rules` | Shared by FastAPI, Django and DRF; no framework imports |
 | `integrations/django/conf.py` | `settings.UNILIMIT` loading, cache, `reset()` | Cleared on `setting_changed` |
 | `integrations/django/_request.py` | `RequestContext` from `HttpRequest`, sync and async user lookup, `aevaluate`, rejection rendering | ASGI async backend, WSGI sync backend |
@@ -55,6 +58,8 @@ pure `plan` and `decide`.
 | `integrations/django/checks.py`, `apps.py` | System checks `unilimit.E001`, `W001`, `W002` | Needs the app in `INSTALLED_APPS` |
 | `integrations/drf/throttling.py` | `UniLimit*Throttle`, `parse_drf_rate`, `ServiceUnavailable` | One batch per view; refuses double throttling |
 | `integrations/drf/checks.py` | `unilimit.E002`, `W003` | |
+| `compat/slowapi.py` | SlowAPI-compatible `Limiter`, `SlowAPIMiddleware`, 429 handler | Built on `Limiter.evaluate`; unsupported options raise |
+| `compat/django_ratelimit.py` | django-ratelimit-compatible `ratelimit` | Wraps the native decorator; one rule per `(group, rate)` |
 | `testing.py` | `ManualClock` | Public test helper |
 
 ## Where does my change go?
