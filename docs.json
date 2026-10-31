@@ -86,5 +86,11 @@
         ]
       }
     ]
-  }
+  },
+  "description": "Rate limiting for FastAPI, Starlette, Django, DRF, and plain Python.",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "favicon": "/favicon.svg"
 }
