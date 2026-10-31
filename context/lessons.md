@@ -34,8 +34,17 @@ surprises you.
 - **Unsynced replicas are never promoted.** With `repl-diskless-sync-delay` (default
   5 s) a freshly created test cluster had no failover-capable replicas. → Test clusters
   use delay 0 and wait for `master_link_status:up`.
-- **Cluster nodes learn new topology asynchronously:** the client may already be
-  redirected while the node you query still reports the old primary. → Poll in tests.
+- **RedisCluster does not reload slot topology on abrupt primary crash (ConnectionError).**
+  redis-py's `_execute_command` only calls `nodes_manager.initialize()` on `ClusterDownError`
+  or `SlotNotCoveredError`, but an abruptly killed primary refuses TCP connections immediately.
+  The client would keep retrying the dead node for 30s until timeout. → On half-open probe in
+  `RedisBackend._sync()` and `_ready_entry()`, call `nodes_manager.initialize()` to reload
+  the slot topology from surviving nodes so the newly promoted replica is discovered.
+- **`RedisCluster.wait_ok` must verify connected replica count.** In a freshly created
+  cluster, checking `master_link_status == 'up'` on existing slaves is insufficient if some
+  replicas haven't completed role assignment yet (empty slave list passes `all()`). → Wait
+  until `len(masters) == primaries`, `len(slaves) == primaries * replicas`, and every master
+  reports `connected_slaves >= replicas`.
 - **Redis 8's top-level `make` builds bundled modules** that need Rust and other
   toolchains. → Build from `src/`.
 
