@@ -12,6 +12,7 @@ memory of earlier sessions can work safely.
 | [decisions.md](decisions.md) | Wondering why something is the way it is, before changing it. |
 | [lessons.md](lessons.md) | Debugging, or before writing Redis/async/test-infra code. Most bugs we hit are here. |
 | [testing.md](testing.md) | Writing or running tests, CI, version matrices, fuzzing. |
+| [adoption-audit.md](adoption-audit.md) | Reviewing onboarding, competitor evidence, adoption priorities, or portfolio integration candidates. |
 | [prior-art.md](prior-art.md) | Comparing with slowapi, limits, django-ratelimit, fastapi-limiter; borrowing from them. |
 | [glossary.md](glossary.md) | Meeting an unfamiliar term (binding result, partial commit, storage key…). |
 

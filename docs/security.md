@@ -18,11 +18,11 @@ UniLimit provides defenses against the following attack vectors:
 |---|---|
 | **IP Spoofing via Headers** | `TrustedProxies` evaluates forwarding headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`) only if the direct TCP peer is trusted; walks right-to-left and halts at the first untrusted hop. |
 | **Header Injection Attacks** | Malformed IP strings, parameter injections, or SQL/command syntax in proxy headers immediately halt header traversal and safely default to the last verified hop. |
-| **Sensitive Data Exposure in Storage** | Storage keys use keyed HMAC-SHA256 digests (`identity_digest`). Raw usernames, passwords, API tokens, and IP addresses are **never** written to Redis or memory keys. |
+| **Sensitive Data Exposure in Storage** | Storage keys use BLAKE2b-128 identity digests (keyed when `identity_secret` is set) (`identity_digest`). Raw usernames, passwords, API tokens, and IP addresses are **never** written to Redis or memory keys. |
 | **Log & Repr Information Leakage** | `Identity.value` is excluded from dataclass `repr` and string representations (`repr=False`). Logs print redacted values only (`value redacted`). |
 | **Telemetry & Metrics Cardinality Attacks** | Observability events and Prometheus metric labels contain bounded low-cardinality metadata (rule names, outcomes, algorithms). User identities and paths are never emitted as metric labels. |
 | **Fail-Open Security Compromise** | While global traffic can default to fail-open (`fail_mode="open"`), critical authentication and billing endpoints can be independently locked down with `fail_mode="closed"`. Authentication or corrupt-data errors **always** fail closed and raise exceptions. |
-| **Redis Connection & Resource Exhaustion** | Bounded connection pools (`max_connections`, `pool_timeout`) and fast timeouts (`socket_timeout=0.5`) prevent connection storms from degrading backend services. All Redis keys have explicit microsecond TTLs. |
+| **Redis Connection & Resource Exhaustion** | Bounded connection pools (`max_connections`, `pool_timeout`) and fast timeouts (`socket_timeout=0.5`) prevent connection storms from degrading backend services. Redis TTLs use millisecond precision; algorithm timestamps use integer microseconds. |
 | **IPv6 Subnet Rotation / Sybil Attacks** | IPv6 client addresses are aggregated by subnet (`/64` by default) so an attacker rotating billions of IPv6 addresses within a `/64` allocation cannot bypass limits. |
 
 ---
@@ -50,7 +50,7 @@ from unilimit import Limiter, TrustedProxies
 
 # Only trust requests whose immediate TCP peer is inside these subnets:
 trusted = TrustedProxies(
-    networks=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+    networks=["192.0.2.10/32"],  # replace with your actual proxy address
     header="X-Forwarded-For",
 )
 
@@ -91,10 +91,10 @@ Example Redis key:
 shop:v1:rl:login:sw:{wracCrvVYOyWdePswde2qQ}
 ```
 
-The `{identity_digest}` segment is a base64url-encoded HMAC-SHA256 digest computed from
+The `{identity_digest}` segment is a base64url-encoded BLAKE2b-128 digest computed from
 `(kind, value)`.
-- If a Redis database is compromised or inspected, raw client IPs, usernames, session IDs,
-  and API keys are not recoverable.
+- Raw identity strings are not stored in the key. Without `identity_secret`, predictable
+  identities can still be recovered by enumeration; hashing is not encryption.
 - The `{digest}` hash tag guarantees that in **Redis Cluster**, all rate-limit counters
   for a given identity map to the exact same hash slot, eliminating multi-slot transaction
   penalties for single clients.
@@ -110,7 +110,7 @@ from unilimit import Limiter
 
 limiter = Limiter.from_url(
     "redis://localhost:6379/0",
-    secret=os.environ["RATELIMIT_SECRET_KEY"],  # e.g. 32+ bytes of high entropy
+    identity_secret=os.environ["RATELIMIT_SECRET_KEY"],  # e.g. 32+ bytes of high entropy
 )
 ```
 
@@ -166,8 +166,9 @@ async def login() -> dict[str, str]:
    coerced to `None` to prevent memory exhaustion attacks.
 2. **Redis Memory Management:** Every rate-limit counter and lease key written to Redis
    has an automatic TTL set via `PEXPIRE`. Unused keys expire automatically. We recommend
-   setting `maxmemory-policy volatile-lru` or `allkeys-lru` in Redis as an added safety
-   measure against sudden bursts of new identities.
+   using a dedicated Redis instance with a memory budget and alerts. Eviction policies
+   such as `volatile-lru` or `allkeys-lru` can remove live counters and admit extra traffic.
+   With `noeviction`, writes can fail when full; capacity and error handling must be tested.
 3. **Connection Pool Bounds:** Configure `max_connections` (default 32) and `pool_timeout`
    (default 1.0s). During connection spikes, excess requests wait up to `pool_timeout`
    rather than spawning hundreds of concurrent TCP connections.

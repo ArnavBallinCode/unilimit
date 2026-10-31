@@ -1,6 +1,17 @@
 # Status
 
-_Last updated: 2026-10-30, after Milestone 6 (observability, fallback, benchmarks)._
+_Last updated: 2026-11-01, adoption documentation audit._
+
+## Current audit
+
+Local package version and latest GitHub release are `0.1.1` (release published 2026-10-30).
+The CI/environment details below are historical records, not new verification of every
+listed matrix. See [adoption-audit.md](adoption-audit.md) for current findings, documentation
+improvements, compatibility gaps, and candidate application integrations.
+
+Local validation for this audit: `UNILIMIT_REQUIRE_REDIS=1 uv run pytest -q` passed
+**1,576 tests** (104 seconds); Ruff, formatting, mypy, and `git diff --check` passed.
+This is local validation, not a new GitHub CI run.
 
 ## Milestones
 

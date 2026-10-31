@@ -143,3 +143,9 @@ surprises you.
 - **`limits`' asyncio Redis storage needs `coredis<5`**, and it is invisible to a redis-py
   round-trip counter. PyrateLimiter's built-in limiters share one bucket across names.
 - **`WAIT` only covers writes of its own connection** (see the failover lesson above).
+
+- **Public examples need execution coverage too.** Framework guide tests did not cover
+  README, assistant references, or security configuration. Those files drifted to
+  nonexistent constructor arguments (`secret=` instead of `identity_secret=`, and
+  invalid WebSocket options). Execute entry-point examples and link canonical API docs
+  instead of duplicating signatures.

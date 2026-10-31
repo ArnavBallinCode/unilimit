@@ -4,11 +4,20 @@ UniLimit learns from existing Python rate limiters. This file records what each 
 does well, where UniLimit differs on purpose, and **everything adopted from them**:
 ideas or code, with licences.
 
+## Current comparison review
+
+See the [2026-11-01 adoption audit](adoption-audit.md) and
+[user comparisons](../docs/comparisons/README.md) for current selection guidance.
+The ledger below records historical design inputs, not a version-independent capability
+matrix. In particular, current FastAPI-Limiter documentation uses PyrateLimiter, and
+SlowAPI already supports costs and in-memory fallback. No competitor code was copied
+for the documentation audit.
+
 ## Projects
 
 | Project | Licence | Copyright | Strengths | Weaknesses UniLimit avoids |
 |---|---|---|---|---|
-| [limits](https://github.com/alisaifee/limits) | MIT | © Ali-Akber Saifee | Strategy/storage split; rate grammar; many storages; moving and sliding windows | No request/identity layer; multiple limits are independent hits (earlier limits stay consumed); async Redis via coredis/valkey, not redis-py |
+| [limits](https://github.com/alisaifee/limits) | MIT | © Ali-Akber Saifee | Strategy/storage split; rate grammar; many storages; moving and sliding windows | No request/identity layer; multiple limits are independent hits (earlier limits stay consumed); async Redis supports coredis or redis-py |
 | [slowapi](https://github.com/laurentS/slowapi) | MIT | © Laurent Savaete | Decorator UX; default/application/shared limits; `in_memory_fallback`; `exempt_when`; `cost`; HTTP-date `Retry-After` | Calls the sync `limits` API from async code (blocks the loop); decorator needs a `request` parameter; `redis<4` extra |
 | [django-ratelimit](https://github.com/jsocol/django-ratelimit) | Apache-2.0 | © James Socol | Any Django cache; `user_or_ip`; `header:`/`get:`/`post:` keys; IPv4/IPv6 masks; `block=False` | Fixed window only; sync only; rate in the cache key (config changes reset counters); decorator runs before DRF auth |
 | [fastapi-limiter](https://github.com/long2ice/fastapi-limiter) | Apache-2.0 | long2ice (author) | Dependency-based API; WebSocket limiter | Trusts the first `X-Forwarded-For` entry blindly; independent limiters per dependency |

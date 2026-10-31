@@ -1,11 +1,6 @@
 {
   "$schema": "https://mintlify.com/schema.json",
   "name": "UniLimit",
-  "logo": {
-    "dark": "/logo/dark.svg",
-    "light": "/logo/light.svg"
-  },
-  "favicon": "/favicon.svg",
   "colors": {
     "primary": "#3B82F6",
     "light": "#60A5FA",
@@ -23,14 +18,16 @@
   ],
   "topbarCtaButton": {
     "name": "Get Started",
-    "url": "https://github.com/ArnavBallinCode/unilimit#quickstart"
+    "url": "https://github.com/ArnavBallinCode/unilimit#try-it-in-two-minutes"
   },
   "navigation": [
     {
       "group": "Getting Started",
       "pages": [
         "README",
-        "llms",
+        "docs/README",
+        "docs/concepts",
+        "docs/deployment",
         "docs/ai_agents"
       ]
     },
@@ -69,9 +66,12 @@
     {
       "group": "Comparisons & Migrations",
       "pages": [
+        "docs/comparisons/README",
+        "docs/migration",
         "docs/comparisons/slowapi-vs-unilimit",
         "docs/comparisons/django-ratelimit-vs-unilimit",
-        "docs/comparisons/limits-vs-unilimit"
+        "docs/comparisons/limits-vs-unilimit",
+        "docs/comparisons/fastapi-limiter-vs-unilimit"
       ]
     }
   ],
