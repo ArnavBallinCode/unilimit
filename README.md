@@ -1,261 +1,122 @@
 # UniLimit
 
-**One rate limiter. Every Python backend.**
+**Rate limiting for FastAPI, Starlette, Django, DRF, and plain Python.**
 
 [![CI](https://github.com/ArnavBallinCode/unilimit/actions/workflows/ci.yml/badge.svg)](https://github.com/ArnavBallinCode/unilimit/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/unilimit?logo=pypi)](https://pypi.org/project/unilimit/)
-[![Python](https://img.shields.io/pypi/pyversions/unilimit?logo=python)](https://pypi.org/project/unilimit/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![PyPI](https://img.shields.io/pypi/v/unilimit)](https://pypi.org/project/unilimit/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-UniLimit is a unified rate-limiting, concurrency-limiting, and quota-enforcement library for
-Python. It provides one battle-tested, framework-independent core shared seamlessly across
-**FastAPI**, **Starlette**, **Django**, **Django REST Framework (DRF)**, and plain Python.
+Use one rule model for synchronous and asynchronous applications, with memory for local
+experiments and Redis for shared counters across workers. Python 3.11+.
 
-Backed by **Redis** (standalone, Cluster, Sentinel, TLS) or **in-memory storage**.
+[Documentation](docs/README.md) · [How it works](docs/concepts.md) ·
+[Deployment checklist](docs/deployment.md) · [Comparisons](docs/comparisons/README.md)
 
----
+## Try it in two minutes
 
-## Highlights
-
-- **Atomic Multi-Rule Batches:** Evaluate multiple rules (e.g. 10/second burst + 10,000/day quota) in a single atomic operation. If any limit is exceeded, **none** are consumed. No compensating decrements.
-- **Identical Python & Lua Semantics:** Our Redis Lua engine is a line-by-line mirror of the Python algorithms, validated with differential property-based fuzzing.
-- **Distributed WebSocket Concurrency:** Cap active concurrent connections across distributed worker nodes with auto-expiring leases, heartbeats, and crash recovery.
-- **Never Over-Admits:** Zero race conditions under concurrency or across processes.
-- **No Blocking I/O on Async Paths:** True `asyncio` execution using `redis.asyncio`.
-- **Zero Raw Identities in Storage:** Keys contain keyed HMAC-SHA256 digests. Raw IPs, usernames, and tokens are never written to storage or leaked in logs.
-- **Production Observability:** Low-cardinality Prometheus metrics, OpenTelemetry integration, structured events, and throttled failure logging.
-- **Fail-Open or Fail-Closed:** Fine-grained resilience strategies with optional local in-memory fallback during Redis outages.
-
----
-
-## Installation
-
-The core library has **zero external runtime dependencies**. Install extras for your stack:
+Install FastAPI support and an application server:
 
 ```bash
-# Core with in-memory backend
-pip install unilimit
-
-# Redis backend (standalone, Cluster, Sentinel, TLS)
-pip install "unilimit[redis]"
-
-# Framework integrations
-pip install "unilimit[fastapi]"
-pip install "unilimit[starlette]"
-pip install "unilimit[django]"
-pip install "unilimit[drf]"
-
-# Observability exporters
-pip install "unilimit[prometheus]"
-pip install "unilimit[otel]"
-
-# Or everything together
-pip install "unilimit[all]"
+pip install "unilimit[fastapi]" uvicorn
 ```
 
----
-
-## Quickstart
-
-### 1. FastAPI
+Save this as `app.py`. No Redis is needed for this single-process example:
 
 ```python
 from fastapi import Depends, FastAPI
-from unilimit import Limiter, Rule
+
+from unilimit import Limiter, MemoryBackend
 from unilimit.integrations.fastapi import RateLimit, setup
 
 app = FastAPI()
-
-# Configure limiter with global and route rules
-limiter = Limiter.from_url(
-    "redis://localhost:6379/0",
-    global_rules=[Rule("site", rate="300/minute")],
-)
+limiter = Limiter(MemoryBackend())
 setup(app, limiter)
 
 
-# Rate limit specific route: 10 requests per minute
-@app.get("/search", dependencies=[Depends(RateLimit("search", rate="10/minute"))])
+@app.get("/search", dependencies=[Depends(RateLimit("search", rate="2/minute"))])
 async def search() -> dict[str, str]:
     return {"status": "ok"}
 ```
 
-### 2. WebSockets & Connection Concurrency (FastAPI & Starlette)
+Run `uvicorn app:app`, then in another terminal:
 
-```python
-from fastapi import FastAPI, WebSocket
-from unilimit import Limiter
-from unilimit.integrations.fastapi import WebSocketConnectionLimit, WebSocketRateLimit
-
-app = FastAPI()
-limiter = Limiter.from_url("redis://localhost:6379/0")
-
-# Limit concurrent connections per IP across all workers:
-concurrency = WebSocketConnectionLimit(limiter, max_connections=5, key="ip")
-
-# Limit message throughput: 20 messages per 10 seconds:
-msg_limit = WebSocketRateLimit(limiter, rate="20/10s")
-
-
-@app.websocket("/chat")
-async def chat(ws: WebSocket):
-    async with concurrency.connection(ws):
-        await ws.accept()
-        while True:
-            text = await ws.receive_text()
-            if not await msg_limit.consume(ws):
-                await ws.send_text('{"error": "rate_limited"}')
-                continue
-            await ws.send_text(f"echo: {text}")
+```bash
+curl -i http://127.0.0.1:8000/search
+curl -i http://127.0.0.1:8000/search
+curl -i http://127.0.0.1:8000/search
 ```
 
-### 3. Django & Django REST Framework
+Run these requests together: the first two return **200**, the third **429 Too Many
+Requests** with a `Retry-After` header. The default key is the client IP. Restarting
+this demo resets its counters; multiple workers each have their own budget.
 
-In your `settings.py`:
+## Use Redis across workers
 
-```python
-# settings.py
-INSTALLED_APPS = [
-    ...,
-    "unilimit.integrations.django",
-]
+Install `pip install "unilimit[fastapi,redis]" uvicorn` and replace the limiter above
+with `Limiter.from_url("redis://localhost:6379/0")`, pointing at a Redis instance you
+operate. Keep `setup(app, limiter)` for middleware and shutdown cleanup.
 
-MIDDLEWARE = [
-    ...,
-    "unilimit.integrations.django.UniLimitMiddleware",
-]
+The default outage policy is **fail-open**: an unavailable backend permits requests.
+Choose `fail_mode="closed"` when availability must yield to enforcement, and read the
+[deployment guide](docs/deployment.md) before protecting sensitive endpoints.
 
-UNILIMIT = {
-    "URL": "redis://localhost:6379/0",
-    "OPTIONS": {
-        "namespace": "myproject",
-        "fail_mode": "open",
-    },
-}
-```
+## Choose your integration
 
-Decorate Django views (sync or async):
-
-```python
-from django.http import HttpRequest, HttpResponse
-from unilimit.integrations.django import ratelimit
-
-
-@ratelimit("search", rate="10/minute", key="ip")
-def search(request: HttpRequest) -> HttpResponse:
-    return HttpResponse("search results")
-```
-
-Or use DRF Throttles:
-
-```python
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from unilimit.integrations.drf import UniLimitUserRateThrottle
-
-
-class ProfileView(APIView):
-    throttle_classes = [UniLimitUserRateThrottle]
-
-    def get(self, request):
-        return Response({"user": request.user.username})
-```
-
-### 4. Plain Python (Framework-Free)
+- **FastAPI:** [quickstart](docs/fastapi/quickstart.md),
+  [authenticated identities](docs/fastapi/authentication.md),
+  [WebSocket message and connection limits](docs/fastapi/websockets.md).
+- **Django:** install `"unilimit[django,redis]"`; follow the
+  [settings, middleware, and view guide](docs/django/quickstart.md).
+- **DRF:** install `"unilimit[drf,redis]"`; follow the
+  [throttle and rate settings guide](docs/drf/quickstart.md). Throttles run after DRF
+  authentication; configure `DEFAULT_THROTTLE_RATES` for named scopes.
+- **Starlette:** install `"unilimit[starlette,redis]"`; use the ASGI middleware and
+  WebSocket helpers from `unilimit.integrations.starlette`.
+- **Plain Python:** install `unilimit`; use the example below.
 
 ```python
 from unilimit import Limiter, MemoryBackend, Rule
 
-# In-memory or Redis backend
 limiter = Limiter(MemoryBackend())
-rule = Rule("checkout", rate="5/minute")
-
-# Synchronous evaluation
+rule = Rule("checkout", "5/minute")
 decision = limiter.consume(rule, identity="user:123")
-if decision.allowed:
-    print(f"Admitted! Remaining: {decision.remaining}")
-else:
-    print(f"Rate limited. Retry after {decision.retry_after:.1f} seconds")
-
-# Asynchronous evaluation
-# decision = await limiter.aconsume(rule, identity="user:123")
+print(decision.allowed, decision.remaining)
+limiter.close()
 ```
 
----
+Use `await limiter.aconsume(...)` and `await limiter.aclose()` in asynchronous code.
 
-## Drop-in Compatibility for Instant Migration
+## Why consider UniLimit?
 
-Migrating an existing codebase? UniLimit provides drop-in compatibility shims that mirror the public APIs of legacy libraries:
+- Apply several rules in one batch: a rejected batch consumes nothing in memory,
+  standalone Redis, or a single Redis Cluster slot.
+- Share rule names, identity handling, and outage policies across frameworks.
+- Choose fixed windows, sliding window counters, or token buckets.
+- Use async Redis I/O, trusted-proxy handling, and identity digests in storage keys.
+- Observe decisions with [Prometheus, OpenTelemetry, or custom observers](docs/observability/metrics.md).
+- Limit WebSocket message rates and active connections separately.
 
-```python
-# Instead of: from slowapi import Limiter, _rate_limit_exceeded_handler
-from unilimit.compat.slowapi import Limiter, _rate_limit_exceeded_handler
+## Know the boundaries
 
-# Instead of: from django_ratelimit.decorators import ratelimit
-from unilimit.compat.django_ratelimit import ratelimit
-```
+Redis Cluster batches spanning slots can partially consume quota (`partial_commit`).
+Middleware and endpoint rules are separate steps: endpoint rejection does not refund
+middleware quota. Memory storage and outage fallback are per process, and memory
+capacity eviction can reset a live counter. Sliding windows are estimates, not exact
+logs of every request. Rate limiting does not replace authentication or edge DDoS protection.
 
-Existing decorators (`@limiter.limit("5/minute")`, `@ratelimit(key="ip", rate="10/m", block=True)`) and exception handlers continue to work untouched, backed by UniLimit's atomic Redis Lua engine and multi-node protection.
+UniLimit is a young project. The [published benchmarks](docs/observability/benchmarks.md)
+include workloads where it is slower than `limits`; there is no blanket speed advantage.
+Compatibility adapters implement only a subset of upstream APIs: read the
+[migration boundaries](docs/migration.md) before switching imports.
 
----
+## Contributing
 
-## AI Agent Ready (`llms.txt`)
-
-UniLimit is designed natively for AI coding assistants (Cursor, Windsurf, Claude Code, GitHub Copilot).
-- **`llms.txt`**: Concise context and API patterns optimized for LLM system prompts.
-- **`llms-full.txt`**: Complete architectural reference and code recipes.
-- **AI Agent Prompts**: Ready-to-use `.cursorrules` and instructions in [`docs/ai_agents.md`](docs/ai_agents.md).
-
----
-
-## Documentation
-
-Comprehensive guides, comparisons, and architectural specifications are available:
-
-- **Documentation & AI:**
-  - [Mintlify Setup & Navigation](mint.json)
-  - [Auto-Documentors Guide](docs/autodocumentors.md)
-  - [AI Agent Integration Guide](docs/ai_agents.md)
-  - [`llms.txt` Context File](llms.txt)
-- **Comparisons & Migration:**
-  - [UniLimit vs. SlowAPI](docs/comparisons/slowapi-vs-unilimit.md)
-  - [UniLimit vs. django-ratelimit](docs/comparisons/django-ratelimit-vs-unilimit.md)
-  - [UniLimit vs. limits](docs/comparisons/limits-vs-unilimit.md)
-- **Framework Guides:**
-  - [FastAPI Guide](docs/fastapi/quickstart.md)
-  - [Django Guide](docs/django/quickstart.md)
-  - [DRF Guide](docs/drf/quickstart.md)
-  - [WebSockets & Concurrency](docs/fastapi/websockets.md)
-- **Deployment & Operations:**
-  - [Redis Configuration & Sentinel](docs/fastapi/redis.md)
-  - [Observability & Metrics](docs/observability/events.md)
-  - [Local Fallback](docs/observability/fallback.md)
-  - [Security Hardening Guide](docs/security.md)
-  - [Custom Storage Backends Contract](docs/custom_backends.md)
-- **Engineering & Architecture:**
-  - [Architecture Rationale](ARCHITECTURE.md)
-  - [API Design Specification](API_DESIGN.md)
-  - [Security Audit Report](context/security-audit.md)
-  - [Benchmark Methodology](docs/observability/benchmarks.md)
-
----
-
-## Testing & Quality Assurance
-
-UniLimit enforces strict invariants tested against real Redis binaries:
-
-```bash
-uv sync
-uv run pytest tests/unit                          # Fast in-memory unit tests (~2s)
-uv run pytest                                     # Full suite (~1,500 tests across Redis & Cluster)
-uv run ruff check . && uv run ruff format --check .
-uv run mypy                                       # Strict typing, 0 errors
-```
-
----
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and useful issue reports.
+For API details, see [API_DESIGN.md](API_DESIGN.md); for coding assistants, start with
+[llms.txt](llms.txt). Bugs and adoption feedback belong in
+[GitHub issues](https://github.com/ArnavBallinCode/unilimit/issues).
 
 ## License
 
-UniLimit is open-source software licensed under the [MIT License](LICENSE).
-Attributions and prior-art adaptations are catalogued in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-and [context/prior-art.md](context/prior-art.md).
+[MIT](LICENSE). [Prior art](context/prior-art.md) and
+[third-party notices](THIRD_PARTY_NOTICES.md) document attribution.

@@ -6,28 +6,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Documentation and adoption
+
+- Added a tested, Redis-free README quickstart, beginner concepts, deployment and
+  migration guides, a documentation index, and contribution/issue-report guidance.
+- Corrected Redis installation instructions, `identity_secret` configuration, BLAKE2b
+  digest descriptions, and atomicity/privacy claims. Added executable public-example
+  coverage and documentation-wide local-link/navigation checks.
+- Replaced unsupported competitor claims with dated upstream sources. Compatibility
+  adapters are partial; see [migration limitations](docs/migration.md).
+- Corrected assistant context and removed missing asset/page references from documentation
+  navigation. Hosted documentation deployment remains unverified.
+
 ## [0.1.1] - 2026-10-31
 
 ### Added
 - **AI Agent-Ready Documentation Standard (`llms.txt` and `llms-full.txt`):** Structured, lightweight context files at repository root following the `llms.txt` specification for seamless ingestion by Cursor, Windsurf, Claude Code, GitHub Copilot, and LLMs.
-- **Drop-in Compatibility Shims (`unilimit.compat`):**
-  - `unilimit.compat.slowapi`: Full drop-in replacement for SlowAPI (`Limiter`, `_rate_limit_exceeded_handler`, `get_remote_address`, `RateLimitExceeded`). Migrates legacy FastAPI/Starlette codebases with zero decorator or endpoint refactoring while gaining UniLimit's Lua-backed atomic guarantees and cluster support.
-  - `unilimit.compat.django_ratelimit`: Full drop-in replacement for `django-ratelimit` (`@ratelimit(key=..., rate=..., block=...)`, `Ratelimited` exception, and synchronous `request.limited` attribute injection).
-- **Agent Prompts & Rules Reference (`docs/ai_agents.md`):** Ready-to-paste system instructions for `.cursorrules`, `.github/copilot-instructions.md`, and `CLAUDE.md` to instruct AI coding agents to always pick UniLimit over legacy single-process rate limiters.
+- **Partial Compatibility Adapters (`unilimit.compat`):**
+  - `unilimit.compat.slowapi`: Basic decorator and exception-handler adapter. Does not
+    implement all SlowAPI options or application-wide enforcement.
+  - `unilimit.compat.django_ratelimit`: Basic synchronous decorator adapter. Callable keys
+    and async views are not supported correctly; see [migration](docs/migration.md).
+- **Agent Prompts & Rules Reference (`docs/ai_agents.md`):** Ready-to-paste system instructions for `.cursorrules`, `.github/copilot-instructions.md`, and `CLAUDE.md` to provide project-specific integration context.
 - **Agentic SEO & Technical Comparisons:**
   - `docs/comparisons/slowapi-vs-unilimit.md`: Detailed technical comparison against SlowAPI.
   - `docs/comparisons/django-ratelimit-vs-unilimit.md`: Detailed technical comparison against django-ratelimit.
   - `docs/comparisons/limits-vs-unilimit.md`: Detailed architectural comparison against limits / coredis.
 - **Modern Auto-Documentor Integration:**
   - Evaluated documentation generators (Mintlify, Fumadocs, Docusaurus, MkDocs Material).
-  - Added pre-configured Mintlify setup (`mint.json`) with interactive search, API references, code snippets, and built-in AI chat assistant.
+  - Added a Mintlify navigation configuration (`mint.json`); this alone does not provision or validate hosted documentation.
   - Added auto-documentor guide (`docs/autodocumentors.md`).
 
 ---
 
 ## [0.1.0] - 2026-10-31
 
-### Initial Production Release
+### Initial Release
 
 UniLimit is a unified rate-limiting and connection concurrency library for Python with a
 shared core across FastAPI, Starlette, Django, Django REST Framework, and plain Python.
@@ -36,9 +52,9 @@ shared core across FastAPI, Starlette, Django, Django REST Framework, and plain 
 
 #### Core & Algorithms
 - **Algorithms:** Fixed window, sliding window counter, and token bucket with sync and async parity.
-- **Atomic Batches:** Multi-limit evaluation evaluates all rules atomically; commits all if admitted, commits none if any rule fails.
+- **Atomic Batches:** All-or-nothing evaluation in memory, standalone Redis, and a single Cluster slot. Cross-slot batches can partially consume quota.
 - **Sans-I/O Architecture:** Rule compilation and policy evaluation are decoupled from storage execution.
-- **Key Derivation & Privacy:** Keyed HMAC-SHA256 digests (`identity_digest`) with optional secret salting. Raw client identities, tokens, and IP addresses are never stored in backend keys or leaked in logs.
+- **Key Derivation & Privacy:** BLAKE2b-128 identity digests, keyed when `identity_secret` is configured. Raw client identities, tokens, and IP addresses are never stored in backend keys or leaked in logs.
 - **In-Memory Storage:** Thread-safe, high-performance in-memory backend for development, testing, and single-process applications.
 
 #### Redis Backend

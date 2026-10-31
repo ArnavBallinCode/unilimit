@@ -1,32 +1,25 @@
-# Comparing limits and UniLimit
+# limits and UniLimit
 
-[limits](https://github.com/alisaifee/limits) is a foundational Python library providing rate-limiting
-storage backends and strategies. UniLimit builds upon the good ideas in `limits` (such as the rate
-grammar `"10/minute"`) while providing an integrated, production-ready framework architecture.
+Reviewed 2026-11-01. [limits](https://limits.readthedocs.io/en/stable/) provides
+rate-limiting strategies and storage backends for applications or framework extensions.
+Its Redis, Memcached, and MongoDB support makes it a strong option when storage choice
+or a small low-level abstraction matters.
 
----
+## Both support async applications
 
-## Quick Comparison Table
+The [async API](https://limits.readthedocs.io/en/stable/async.html) mirrors its synchronous
+API. Async Redis can use coredis or redis-py; describing it as coredis-only is outdated.
+UniLimit uses redis-py for Redis and adds request identity resolution, framework responses,
+observability hooks, and connection leases around the limiting algorithms.
 
-| Capability | limits | UniLimit |
-|---|---|---|
-| **Multi-Rule Evaluation** | ❌ Independent hit calls (sequential) | ✅ **Atomic batches** (single Redis Lua call) |
-| **Framework Integrations** | ❌ None (low-level building block) | ✅ **Batteries-included** for FastAPI, Starlette, Django, and DRF |
-| **Connection Concurrency** | ❌ Rate limits only | ✅ **Native WebSocket connection capping** (`WebSocketConnectionLimit`) |
-| **Storage Key Privacy** | ❌ Plaintext keys | ✅ **HMAC-SHA256 digests** (no IPs or user tokens in keys) |
-| **Redis Cluster Safety** | ⚠️ Multi-keys span multiple slots | ✅ **Slot-pinned** per identity via `{digest}` hash tags |
-| **Redis Topologies** | Standalone, Sentinel, Cluster | Standalone, Sentinel, Cluster, TLS |
-| **Async Support** | Separate async backends (coredis/asyncio) | First-class sync and `redis.asyncio` with loop lifecycle handling |
-| **Observability** | ❌ None | ✅ **Prometheus**, **OpenTelemetry**, and throttled logging |
-| **Outage Fallback** | ❌ None | ✅ **Opt-in in-memory fallback** |
+## Different scope and costs
 
----
+Independent `limits` hits are not a transaction spanning multiple rules. UniLimit adds
+atomic batch evaluation for memory, standalone Redis, and same-slot Redis Cluster rules.
+Cross-slot and middleware/route boundaries still apply. UniLimit's sliding-window counter
+is an approximation, not a substitute for an exact moving-window log.
 
-## Architecture Summary
-
-While `limits` is an unopinionated library for evaluating single limits, UniLimit is an
-end-to-end enforcement engine:
-- It maps HTTP request contexts (headers, cookies, sessions, proxy chains) to identities.
-- It calculates standards-compliant HTTP response headers (`X-RateLimit-*`, `Retry-After`).
-- It renders framework rejection responses (429 Too Many Requests, 503 Service Unavailable).
-- It tracks distributed WebSocket connection leases with automated heartbeats.
+UniLimit's [published benchmark runs](../observability/benchmarks.md) include slower
+library-level results than `limits`. Choose UniLimit for its integrated policies and
+framework behavior when those justify the overhead; benchmark your own workload.
+There is no universal performance advantage or import-compatible migration.

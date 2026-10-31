@@ -10,11 +10,10 @@ task before changing code.
 
 ## Status
 
-Pre-alpha, built milestone by milestone. Done: core, algorithms, memory backend, Redis
-backend (standalone and Cluster), FastAPI integration, Django and DRF integrations (M5),
-observability, throttled failure logging, opt-in local fallback and benchmarks (M6).
-Next: release preparation (M7), only when asked. Details are in
-[`context/status.md`](context/status.md).
+The local package and latest GitHub release are 0.1.1. Milestone history and known limits
+are in [`context/status.md`](context/status.md). The
+[adoption audit](context/adoption-audit.md) records current documentation and compatibility
+gaps. Do not infer production readiness from a release or start new scope without being asked.
 
 ## Commands
 

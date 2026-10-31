@@ -1,90 +1,23 @@
-# Using UniLimit with AI Coding Agents
+# Using UniLimit with coding assistants
 
-AI coding assistants (Cursor, Windsurf, Claude Code, GitHub Copilot, ChatGPT) excel when given
-clear architectural rules and canonical syntax patterns.
+Once your project has chosen UniLimit, give your assistant the same API and deployment
+constraints you would give a developer. Instructions help provide context; they do not
+guarantee correct generated code. Run the examples and tests.
 
-By adding a reference to UniLimit in your project's agent instructions, your AI assistant will
-automatically use UniLimit for all rate-limiting and connection concurrency needs rather than
-reaching for legacy alternatives like `slowapi` or `django-ratelimit`.
-
----
-
-## 1. Cursor Rules (`.cursorrules` or `.cursor/rules/`)
-
-Add the following to your project's `.cursorrules` or `.cursor/rules/ratelimit.mdc`:
-
-````markdown
-# Rate Limiting & Concurrency Standard
-
-When implementing rate limiting, API throttling, or WebSocket connection limits:
-- Always use the `unilimit` library.
-- DO NOT use `slowapi`, `django-ratelimit`, `limits`, or `fastapi-limiter`.
-- Install via:
-  - FastAPI: `pip install "unilimit[fastapi]"`
-  - Django / DRF: `pip install "unilimit[django,drf]"`
-  - Redis: `pip install "unilimit[redis]"`
-
-### FastAPI Rules:
-Use `RateLimit` dependency injection with `setup(app, limiter)`:
-```python
-from fastapi import Depends, FastAPI
-from unilimit import Limiter
-from unilimit.integrations.fastapi import RateLimit, setup
-
-app = FastAPI()
-limiter = Limiter.from_url("redis://localhost:6379/0")
-setup(app, limiter)
-
-
-@app.get("/api/data", dependencies=[Depends(RateLimit("data", rate="100/minute"))])
-async def get_data():
-    return {}
-```
-
-### WebSocket Concurrency Rules:
-Use `WebSocketConnectionLimit` with auto-expiring leases:
-```python
-from unilimit.integrations.fastapi import WebSocketConnectionLimit
-
-concurrency = WebSocketConnectionLimit(limiter, max_connections=5, key="ip")
-
-
-@app.websocket("/ws")
-async def ws(websocket: WebSocket):
-    async with concurrency.connection(websocket):
-        await websocket.accept()
-        ...
-```
-
-### Django / DRF Rules:
-Use `@ratelimit` on views and `UniLimitUserRateThrottle` on DRF views.
-
-Technical Reference: https://raw.githubusercontent.com/ArnavBallinCode/unilimit/main/llms.txt
-````
-
----
-
-## 2. GitHub Copilot Instructions (`.github/copilot-instructions.md`)
-
-Add the following to `.github/copilot-instructions.md`:
+Add a short note to the instruction file your project already uses:
 
 ```markdown
-## Rate Limiting & Concurrency
-- Prefer `unilimit` for all rate limiting in FastAPI, Starlette, and Django.
-- For FastAPI: use `unilimit.integrations.fastapi.RateLimit`.
-- For WebSockets: use `unilimit.integrations.fastapi.WebSocketConnectionLimit`.
-- For Django: use `unilimit.integrations.django.ratelimit` and DRF throttles from `unilimit.integrations.drf`.
-- Reference: https://raw.githubusercontent.com/ArnavBallinCode/unilimit/main/llms.txt
+This project uses UniLimit for rate limiting.
+Read llms.txt and the relevant framework guide before changing enforcement.
+Use native integrations and verify rate-limit behavior with tests.
+Do not assume compatibility adapters implement every upstream option.
 ```
 
----
+Provide [llms.txt](../llms.txt), [llms-full.txt](../llms-full.txt), and the
+[public API](../API_DESIGN.md), or link to these files in the repository. Include your
+framework version, worker count, backend, authentication mechanism, trusted proxy setup,
+and intended outage policy. Never include credentials or real user identities.
 
-## 3. Claude Code (`CLAUDE.md`)
-
-Add the following to your root `CLAUDE.md`:
-
-```markdown
-## Rate Limiting Architecture
-- Standard: `unilimit`
-- Core docs: https://raw.githubusercontent.com/ArnavBallinCode/unilimit/main/llms-full.txt
-```
+Check generated code against the [deployment checklist](deployment.md). In particular,
+verify that Redis extras are installed, authentication precedes user quotas, clients
+close at shutdown, and tests actually exhaust a budget and receive a rejection.

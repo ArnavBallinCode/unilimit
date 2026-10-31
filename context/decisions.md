@@ -148,3 +148,14 @@ decision needs the maintainer's agreement and a new entry here.
 
 
 
+
+## Adoption documentation audit (2026-11-01)
+
+- Native integrations are the recommended onboarding path. Compatibility adapters are
+  explicitly partial until their behavioral gaps have regression coverage and fixes.
+- Public claims must state Cluster, middleware-stage, memory, and fallback boundaries.
+  Comparisons cite dated upstream evidence and link to existing measured benchmarks.
+- README and assistant quickstarts are executable HTTP examples; security configuration
+  examples run against isolated Redis. Local link checks cover user docs as well as context.
+- This change does not alter public enforcement APIs or publish/deploy a service. See
+  [the audit](adoption-audit.md) for evidence and remaining product work.

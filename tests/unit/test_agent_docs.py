@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -14,6 +15,10 @@ AGENT_DOCS = [
     ROOT / "README.md",
     ROOT / ".github" / "copilot-instructions.md",
     *sorted((ROOT / "context").glob("*.md")),
+    *sorted((ROOT / "docs").rglob("*.md")),
+    ROOT / "CONTRIBUTING.md",
+    ROOT / "llms.txt",
+    ROOT / "llms-full.txt",
 ]
 LINK = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
 
@@ -43,3 +48,10 @@ def test_tests_cited_in_context_exist() -> None:
 
 def test_claude_md_imports_agents_md() -> None:
     assert "@AGENTS.md" in (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def test_documentation_navigation_resolves() -> None:
+    navigation = json.loads((ROOT / "mint.json").read_text())["navigation"]
+    for group in navigation:
+        for page in group["pages"]:
+            assert (ROOT / f"{page}.md").is_file(), f"missing navigation page: {page}"

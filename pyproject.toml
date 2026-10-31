@@ -38,7 +38,7 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/ArnavBallinCode/unilimit"
-Documentation = "https://github.com/ArnavBallinCode/unilimit#readme"
+Documentation = "https://github.com/ArnavBallinCode/unilimit/blob/main/docs/README.md"
 Repository = "https://github.com/ArnavBallinCode/unilimit"
 Issues = "https://github.com/ArnavBallinCode/unilimit/issues"
 Changelog = "https://github.com/ArnavBallinCode/unilimit/blob/main/CHANGELOG.md"

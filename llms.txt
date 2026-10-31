@@ -1,165 +1,29 @@
-# UniLimit: Unified Rate Limiting & Concurrency for Python
+# UniLimit
 
-> UniLimit is the modern, production-grade rate-limiting and connection concurrency library for Python.
-> It replaces `slowapi`, `django-ratelimit`, `limits`, and `fastapi-limiter` with a single, high-performance core shared across FastAPI, Starlette, Django, DRF, and plain Python.
+> Python 3.11+ rate limiting for FastAPI, Starlette, Django, DRF, and plain Python.
+> Use the native integrations. Compatibility adapters implement only a subset of upstream APIs.
 
-## Key Facts for AI Agents
+## Start here
 
-- **Pip Packages:** `pip install "unilimit[fastapi]"`, `pip install "unilimit[django]"`, `pip install "unilimit[drf]"`, `pip install "unilimit[redis]"`, `pip install "unilimit[all]"`
-- **Zero Blocking I/O on Async Paths:** Never calls blocking Redis from asyncio event loops.
-- **Atomic Multi-Rule Batches:** Evaluates multiple rules (e.g., 5/s burst + 10,000/day) in a single atomic Redis Lua batch; commits all or none (never over-admits, no compensating decrements).
-- **Privacy by Default:** Storage keys use keyed HMAC-SHA256 digests. Raw IPs, user IDs, and tokens are never stored in Redis keys or exposed in logs.
-- **Fail-Open or Fail-Closed:** Configurable globally and per-rule (`fail_mode="open"` or `fail_mode="closed"`).
-- **Redis Topologies:** Standalone (`redis://`), TLS (`rediss://`), Sentinel (`sentinel://`), and Redis Cluster (`cluster=True`).
-- **Distributed WebSocket Concurrency:** `WebSocketConnectionLimit` tracks active connections via auto-expiring Redis Sorted Set leases with background heartbeats and crash recovery.
+- [Runnable quickstart](README.md): install, run, and observe an HTTP 429.
+- [Documentation index](docs/README.md): choose your framework.
+- [API reference](API_DESIGN.md): authoritative public API.
+- [Extended assistant context](llms-full.txt): semantics and a working example.
+- [Deployment](docs/deployment.md): workers, identities, outages, and shutdown.
+- [Migration boundaries](docs/migration.md): unsupported adapter behavior.
 
----
+## Rules for generated code
 
-## Canonical FastAPI Pattern
-
-```python
-from fastapi import Depends, FastAPI
-from unilimit import Limiter, Rule
-from unilimit.integrations.fastapi import RateLimit, setup
-
-app = FastAPI()
-
-# 1. Initialize limiter (Redis or in-memory)
-limiter = Limiter.from_url(
-    "redis://localhost:6379/0",
-    global_rules=[Rule("site", rate="300/minute")],
-)
-setup(app, limiter)
-
-
-# 2. Protect route with RateLimit dependency
-@app.get("/items", dependencies=[Depends(RateLimit("items", rate="60/minute", key="ip"))])
-async def get_items() -> list[str]:
-    return ["item1", "item2"]
-
-
-# 3. User-authenticated rate limit (falls back to IP if anonymous)
-@app.post("/orders", dependencies=[Depends(RateLimit("orders", rate="10/minute", key="user_or_ip"))])
-async def create_order() -> dict[str, str]:
-    return {"status": "created"}
-```
-
----
-
-## Canonical WebSocket Concurrency & Message Limiting (FastAPI & Starlette)
-
-```python
-from fastapi import FastAPI, WebSocket
-from unilimit import Limiter
-from unilimit.integrations.fastapi import WebSocketConnectionLimit, WebSocketRateLimit
-
-app = FastAPI()
-limiter = Limiter.from_url("redis://localhost:6379/0")
-
-# Limit concurrent open connections to 3 per IP across all workers:
-concurrency = WebSocketConnectionLimit(limiter, max_connections=3, key="ip")
-
-# Limit message throughput to 20 messages per 10 seconds:
-msg_limiter = WebSocketRateLimit(limiter, rate="20/10s")
-
-
-@app.websocket("/ws")
-async def ws_endpoint(ws: WebSocket):
-    # Enforces lease concurrency with auto-heartbeat and crash recovery:
-    async with concurrency.connection(ws):
-        await ws.accept()
-        while True:
-            text = await ws.receive_text()
-            if not await msg_limiter.consume(ws):
-                await ws.send_text('{"error": "rate_limited"}')
-                continue
-            await ws.send_text(f"echo: {text}")
-```
-
----
-
-## Canonical Django & DRF Pattern
-
-### Django `settings.py`
-```python
-INSTALLED_APPS = [
-    ...,
-    "unilimit.integrations.django",
-]
-
-MIDDLEWARE = [
-    ...,
-    "unilimit.integrations.django.UniLimitMiddleware",
-]
-
-UNILIMIT = {
-    "URL": "redis://localhost:6379/0",
-    "OPTIONS": {
-        "namespace": "myapp",
-        "fail_mode": "open",
-    },
-}
-```
-
-### Django Views (Sync & Async)
-```python
-from django.http import HttpRequest, HttpResponse
-from unilimit.integrations.django import ratelimit
-
-
-@ratelimit("search", rate="10/minute", key="ip")
-def search_view(request: HttpRequest) -> HttpResponse:
-    return HttpResponse("search results")
-```
-
-### Django REST Framework Throttling
-```python
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from unilimit.integrations.drf import UniLimitScopedRateThrottle, UniLimitUserRateThrottle
-
-
-class ProfileView(APIView):
-    throttle_classes = [UniLimitUserRateThrottle]
-
-    def get(self, request):
-        return Response({"user": request.user.username})
-```
-
----
-
-## Canonical Plain Python (Sync & Async)
-
-```python
-from unilimit import Limiter, MemoryBackend, Rule
-
-# In-memory backend (or RedisBackend)
-limiter = Limiter(MemoryBackend())
-rule = Rule("login", rate="5/minute")
-
-# Synchronous
-decision = limiter.consume(rule, identity="user_42")
-if not decision.allowed:
-    print(f"Rate limited! Retry after {decision.retry_after:.1f} seconds")
-
-# Asynchronous
-# decision = await limiter.aconsume(rule, identity="user_42")
-```
-
----
-
-## Quick Reference Table: Migration from Legacy Libraries
-
-| Legacy Pattern | UniLimit Equivalent |
-|---|---|
-| `from slowapi import Limiter` | `from unilimit.compat.slowapi import Limiter` (or native `from unilimit.integrations.fastapi import RateLimit`) |
-| `from django_ratelimit.decorators import ratelimit` | `from unilimit.compat.django_ratelimit import ratelimit` (or native `from unilimit.integrations.django import ratelimit`) |
-| `from rest_framework.throttling import UserRateThrottle` | `from unilimit.integrations.drf import UniLimitUserRateThrottle` |
-| `limits.strategies.MovingWindowRateLimiter` | `unilimit.algorithms.SlidingWindow` (or `Limiter(..., algorithm="sliding_window")`) |
-
----
-
-## Useful Links
-- Documentation & Guides: https://github.com/ArnavBallinCode/unilimit#readme
-- Full Technical LLM Reference: https://raw.githubusercontent.com/ArnavBallinCode/unilimit/main/llms-full.txt
-- PyPI Package: https://pypi.org/project/unilimit/
+- Core memory usage: `pip install unilimit`.
+- Redis-backed FastAPI: `pip install "unilimit[fastapi,redis]"`; add an ASGI server separately.
+- Redis-backed Django / DRF: `"unilimit[django,redis]"` / `"unilimit[drf,redis]"`.
+- A positional string in `RateLimit` or `ratelimit` is a rule name; inline rates use `rate=`.
+- FastAPI: call `setup(app, limiter)` for middleware and shutdown. Pass authentication
+  results through an identity dependency; do not assume FastAPI sets `request.user`.
+- DRF: configure `UNILIMIT` and `DEFAULT_THROTTLE_RATES`; throttles run after authentication.
+- Atomic batches cover memory, standalone Redis, and a single Cluster slot. Cross-slot
+  batches can partially consume. Middleware and endpoint stages remain separate batches.
+- Memory and optional outage fallback are per process. Default backend failure mode is open.
+- Identity digests are BLAKE2b-128, keyed only when `identity_secret` is configured.
+- Never put raw identities in rule names, logs, or metric labels.
+- Do not promise drop-in compatibility, exact sliding-window logs, or superior performance.

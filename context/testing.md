@@ -74,6 +74,10 @@
   `docs/drf/*.md` in `tests/django_integration/test_docs.py`, which then checks the
   behaviour the page describes. A new page must be added to `test_every_page_has_examples`
   (`django/versions.md` is text only).
+- **Public entry points.** `tests/fastapi_integration/test_public_docs.py` executes the
+  README and assistant examples, checks HTTP rejection and identity isolation with a
+  frozen clock, and exercises security-guide configuration against isolated Redis.
+  `tests/unit/test_agent_docs.py` checks local links throughout user docs and navigation.
 - **Never weaken a test** to make it pass. If a test was wrong, say why in the commit.
 
 ## Matrices
