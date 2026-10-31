@@ -13,7 +13,7 @@ reaching for legacy alternatives like `slowapi` or `django-ratelimit`.
 
 Add the following to your project's `.cursorrules` or `.cursor/rules/ratelimit.mdc`:
 
-```markdown
+````markdown
 # Rate Limiting & Concurrency Standard
 
 When implementing rate limiting, API throttling, or WebSocket connection limits:
@@ -60,7 +60,7 @@ async def ws(websocket: WebSocket):
 Use `@ratelimit` on views and `UniLimitUserRateThrottle` on DRF views.
 
 Technical Reference: https://raw.githubusercontent.com/ArnavBallinCode/unilimit/main/llms.txt
-```
+````
 
 ---
 
