@@ -15,8 +15,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
       - run: uv sync --locked
@@ -32,13 +32,13 @@ jobs:
       matrix:
         python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Redis (distribution package)
         run: |
           sudo apt-get update -q
           sudo apt-get install -yq redis-server
           redis-server --version
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
@@ -56,10 +56,10 @@ jobs:
           - { name: redis-stable, url: "https://download.redis.io/redis-stable.tar.gz", bin: redis-server }
           - { name: valkey-8.0.2, url: "https://github.com/valkey-io/valkey/archive/refs/tags/8.0.2.tar.gz", bin: valkey-server }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache server build
         if: matrix.server.name != 'redis-stable'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/servers/${{ matrix.server.name }}
           key: server-${{ runner.os }}-${{ matrix.server.name }}
@@ -74,7 +74,7 @@ jobs:
           fi
           "$dir/src/${{ matrix.server.bin }}" --version
           echo "UNILIMIT_REDIS_SERVER=$dir/src/${{ matrix.server.bin }}" >> "$GITHUB_ENV"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
       - run: uv sync --locked
@@ -93,10 +93,10 @@ jobs:
           - { fastapi: "0.140.0", starlette: "1.10.0" }
           - { fastapi: "0.162.0", starlette: "1.10.0" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Redis (distribution package)
         run: sudo apt-get update -q && sudo apt-get install -yq redis-server
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
       - run: uv sync --locked
@@ -117,10 +117,10 @@ jobs:
           - { django: "6.0.*", drf: "3.17.*" }
           - { django: "6.1.*", drf: "3.18.*" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Redis (distribution package)
         run: sudo apt-get update -q && sudo apt-get install -yq redis-server
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
       - run: uv sync --locked
@@ -134,10 +134,10 @@ jobs:
     name: benchmark tooling (smoke)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Redis (distribution package)
         run: sudo apt-get update -q && sudo apt-get install -yq redis-server
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
       - run: uv sync --locked --group bench
@@ -149,8 +149,8 @@ jobs:
   wheel:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
       - run: uv build
