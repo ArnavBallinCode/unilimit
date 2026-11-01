@@ -23,6 +23,11 @@ updates:
   # Maintain Python dependencies managed by Astral uv (pyproject.toml and uv.lock)
   - package-ecosystem: "uv"
     directory: "/"
+    # The limits asyncio benchmark requires coredis 4.x (see context/lessons.md).
+    # Keep compatible updates, but do not propose widening its explicit upper bound.
+    ignore:
+      - dependency-name: "coredis"
+        versions: [">=5"]
     schedule:
       interval: "weekly"
       day: "monday"

@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-01, Starlette packaging fix and compatibility adapter repair._
+_Last updated: 2026-11-01, CI documentation migration repair._
 
 ## Current audit
 
@@ -37,6 +37,14 @@ Previous local validation for the documentation audit: 1,576 tests.
 Milestones start only when the maintainer asks.
 
 ## CI
+
+The `a86ad6b` main-branch run failed on all four Python versions because the hosting
+guide and navigation test still referenced the deleted `mint.json`. The repair uses
+`docs.json` and validates its nonempty `navigation.groups`. Local validation passed
+1,630 tests with Redis required, Ruff, formatting, mypy, and the benchmark smoke run
+(including report generation). GitHub has not yet run
+the repair. Dependabot now ignores coredis >=5 to preserve the benchmark's existing
+compatibility bound after the coredis 6 upgrade PR failed its smoke test.
 
 GitHub Actions (`.github/workflows/ci.yml`), 19 jobs:
 - lint (Ruff and mypy);

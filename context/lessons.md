@@ -103,6 +103,14 @@ surprises you.
 
 ## Test infrastructure
 
+- **Removing a docs configuration leaves consumers behind.** Deleting `mint.json`
+  broke every Python CI job because the navigation test and hosting guide still used
+  it. Keep the test pointed at `docs.json` and its `navigation.groups` structure;
+  assert groups and pages are nonempty so a schema mismatch cannot silently skip checks.
+- **Dependabot can widen a deliberately bounded dependency.** Its coredis 6 upgrade
+  broke the `limits` asyncio benchmark's connection-pool lifecycle. Keep `coredis<5`
+  in the benchmark group and ignore versions >=5 in Dependabot until that integration
+  is migrated; compatible 4.x updates remain enabled.
 - **Resource leaks surface at random GC times** (CI failed at session teardown while
   local runs passed). → GC after every Redis or FastAPI test, so the leaking test fails.
 - **Filling Redis "up to" `maxmemory` is racy**: client buffers count toward

@@ -1,7 +1,7 @@
 # Documentation hosting
 
 The readable entry point today is [docs/README.md](README.md), with a runnable example
-in the repository [README](../README.md). A [`mint.json`](../mint.json) navigation
+in the repository [README](../README.md). A [`docs.json`](../docs.json) navigation
 configuration is included, but a configuration file alone does not provision a hosted
 site, confirm a public URL, or validate a production build.
 

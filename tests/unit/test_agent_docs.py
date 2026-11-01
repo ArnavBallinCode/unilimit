@@ -51,7 +51,9 @@ def test_claude_md_imports_agents_md() -> None:
 
 
 def test_documentation_navigation_resolves() -> None:
-    navigation = json.loads((ROOT / "mint.json").read_text())["navigation"]
-    for group in navigation:
+    navigation = json.loads((ROOT / "docs.json").read_text(encoding="utf-8"))["navigation"]
+    assert navigation["groups"], "documentation navigation must contain groups"
+    for group in navigation["groups"]:
+        assert group["pages"], f"empty navigation group: {group['group']}"
         for page in group["pages"]:
             assert (ROOT / f"{page}.md").is_file(), f"missing navigation page: {page}"
