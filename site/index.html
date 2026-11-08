@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UniLimit — Rate limiting for FastAPI, Django & Python</title>
+  <meta name="description" content="One rate limiter for every Python backend. Atomic Lua batches, sync and async, Redis and memory, zero raw identities.">
+  <link rel="icon" type="image/svg+xml" href="assets/dark.svg">
+
+  <!-- Tailwind CSS CDN with Typography -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              200: '#bfdbfe',
+              300: '#93c5fd',
+              400: '#60a5fa',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+              900: '#1e3a8a',
+            },
+            dark: {
+              900: '#070a13',
+              800: '#0d1322',
+              700: '#151f38',
+              600: '#1f2d4f',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['JetBrains Mono', 'Fira Code', 'Menlo', 'Monaco', 'Courier New', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Prism.js Syntax Highlighting -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #070a13;
+      color: #f1f5f9;
+    }
+    code, pre {
+      font-family: 'JetBrains Mono', monospace !important;
+    }
+    .hero-glow {
+      background: radial-gradient(circle at 50% 20%, rgba(59, 130, 246, 0.15) 0%, rgba(147, 51, 234, 0.08) 35%, transparent 70%);
+    }
+    .card-border {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      transition: all 0.25s ease-in-out;
+    }
+    .card-border:hover {
+      border-color: rgba(96, 165, 250, 0.35);
+      box-shadow: 0 10px 30px -10px rgba(59, 130, 246, 0.2);
+    }
+  </style>
+</head>
+<body class="min-h-screen selection:bg-brand-500 selection:text-white">
+
+  <!-- Top Announcement Banner -->
+  <div class="bg-gradient-to-r from-blue-900/60 via-indigo-900/50 to-blue-900/60 border-b border-blue-500/20 py-2 px-4 text-center text-xs sm:text-sm text-blue-200">
+    <span>🚀 <strong>UniLimit v0.1.1</strong> is live on PyPI! Full support for FastAPI, Django, DRF & WebSockets.</span>
+    <a href="https://pypi.org/project/unilimit/" target="_blank" class="underline ml-2 text-white hover:text-blue-300 font-medium">View on PyPI &rarr;</a>
+  </div>
+
+  <!-- Navigation -->
+  <nav class="sticky top-0 z-50 backdrop-blur-xl bg-dark-900/80 border-b border-white/10 px-4 sm:px-8 py-4">
+    <div class="max-w-7xl mx-auto flex items-center justify-between">
+      <a href="#" class="flex items-center gap-3">
+        <img src="assets/dark.svg" alt="UniLimit Logo" class="h-8 w-auto">
+      </a>
+
+      <div class="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
+        <a href="#features" class="hover:text-white transition">Features</a>
+        <a href="#quickstart" class="hover:text-white transition">Quickstart</a>
+        <a href="#frameworks" class="hover:text-white transition">Frameworks</a>
+        <a href="#benchmarks" class="hover:text-white transition">Benchmarks</a>
+        <a href="#architecture" class="hover:text-white transition">Architecture</a>
+        <a href="https://github.com/ArnavBallinCode/unilimit#readme" target="_blank" class="hover:text-white transition">Docs</a>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <a href="https://pypi.org/project/unilimit/" target="_blank" class="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/10 hover:bg-white/10 transition text-slate-300">
+          <svg class="w-4 h-4 text-brand-400" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0L1.5 6v12L12 24l10.5-6V6L12 0zm-1.5 3.3l7.5 4.3-3.2 1.8-7.5-4.3 3.2-1.8zm-7.5 5.2l7.5 4.3v7.3l-7.5-4.3V8.5zm9 11.6v-7.3l7.5-4.3v7.3l-7.5 4.3z"/></svg>
+          v0.1.1
+        </a>
+        <a href="https://github.com/ArnavBallinCode/unilimit" target="_blank" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-brand-600 hover:bg-brand-500 text-white shadow-lg shadow-brand-500/25 transition">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+          <span>Star on GitHub</span>
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="relative pt-20 pb-24 overflow-hidden hero-glow">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      
+      <!-- Pill Badge -->
+      <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-blue-500/10 border border-blue-500/20 text-blue-400 mb-8 backdrop-blur-sm">
+        <span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
+        <span>The Unified Python Rate Limiter</span>
+        <span class="text-white/30">•</span>
+        <span>Zero Runtime Dependencies in Core</span>
+      </div>
+
+      <!-- Main Headline -->
+      <h1 class="text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-white mb-6">
+        One rate limiter.<br />
+        <span class="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-300 to-purple-400">
+          Every Python backend.
+        </span>
+      </h1>
+
+      <p class="max-w-3xl mx-auto text-lg sm:text-xl text-slate-300 mb-10 leading-relaxed font-normal">
+        Production rate limiting for <strong>FastAPI</strong>, <strong>Django</strong>, <strong>DRF</strong>, <strong>WebSockets</strong> and plain Python.
+        One atomic Lua evaluation, zero raw identities in storage, sync and async, backed by Redis or memory.
+      </p>
+
+      <!-- Terminal / Quick Install Box -->
+      <div class="max-w-xl mx-auto mb-10">
+        <div class="card-border rounded-2xl p-3 sm:p-4 text-left flex items-center justify-between gap-4 bg-dark-800/90 shadow-2xl">
+          <div class="flex items-center gap-3 overflow-x-auto text-sm sm:text-base font-mono">
+            <span class="text-brand-400 font-bold">$</span>
+            <span id="installCmd" class="text-slate-200">uv add "unilimit[fastapi,redis]"</span>
+          </div>
+          <button onclick="copyInstallCmd()" id="copyBtn" class="shrink-0 p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition" title="Copy command">
+            <svg id="copyIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+            <svg id="checkIcon" class="w-5 h-5 text-emerald-400 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          </button>
+        </div>
+        <div class="flex justify-center gap-6 mt-3 text-xs text-slate-400 font-mono">
+          <button onclick="setInstallTool('uv')" class="hover:text-brand-400 underline decoration-dotted">uv</button>
+          <button onclick="setInstallTool('pip')" class="hover:text-brand-400 underline decoration-dotted">pip</button>
+          <button onclick="setInstallTool('poetry')" class="hover:text-brand-400 underline decoration-dotted">poetry</button>
+        </div>
+      </div>
+
+      <!-- Hero Action Buttons -->
+      <div class="flex flex-wrap justify-center items-center gap-4">
+        <a href="#quickstart" class="px-6 py-3.5 rounded-xl font-semibold bg-white text-dark-900 hover:bg-slate-200 transition shadow-lg shadow-white/10">
+          Get Started &rarr;
+        </a>
+        <a href="#benchmarks" class="px-6 py-3.5 rounded-xl font-semibold bg-white/10 hover:bg-white/15 text-white border border-white/15 transition">
+          See Benchmarks
+        </a>
+      </div>
+
+      <!-- Trust Badges -->
+      <div class="mt-14 pt-8 border-t border-white/5 flex flex-wrap justify-center items-center gap-8 text-xs font-mono text-slate-400">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          Python 3.11, 3.12, 3.13
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+          FastAPI & Starlette
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-green-500"></span>
+          Django 4.2, 5.0, 5.1, 5.2
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+          100% Strict Type Hints
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Key Architectural Pillars -->
+  <section id="features" class="py-20 bg-dark-900 border-t border-white/5">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <h2 class="text-xs uppercase font-bold tracking-widest text-brand-400 mb-2">Engineered For Scale</h2>
+        <p class="text-3xl sm:text-4xl font-extrabold text-white">Why developers are switching from legacy limiters</p>
+        <p class="text-slate-400 mt-4 text-base">Traditional Python libraries force you to juggle disparate, unmaintained libraries with blocking I/O and leaky atomicity. UniLimit replaces them all.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        
+        <!-- Feature 1 -->
+        <div class="card-border rounded-2xl p-7 bg-dark-800/50">
+          <div class="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-5">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          </div>
+          <h3 class="text-xl font-bold text-white mb-2">Atomic Multi-Tier Batches</h3>
+          <p class="text-slate-300 text-sm leading-relaxed">
+            Evaluate <code>10/sec</code>, <code>100/min</code>, and <code>10,000/day</code> in a <strong>single Redis EVALSHA</strong>. If any limit trips, zero counters increment. No over-admit bugs, no compensating decrements.
+          </p>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="card-border rounded-2xl p-7 bg-dark-800/50">
+          <div class="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 mb-5">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </div>
+          <h3 class="text-xl font-bold text-white mb-2">Zero Raw Identities in Storage</h3>
+          <p class="text-slate-300 text-sm leading-relaxed">
+            Privacy by design. Client IPs, auth tokens, and usernames are strictly hashed using keyed HMAC/BLAKE2b before hitting Redis keys. GDPR & SOC-2 compliance out of the box.
+          </p>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="card-border rounded-2xl p-7 bg-dark-800/50">
+          <div class="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 mb-5">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          </div>
+          <h3 class="text-xl font-bold text-white mb-2">Async & Sync Native</h3>
+          <p class="text-slate-300 text-sm leading-relaxed">
+            Core policy is purely sans-I/O. Async routes use native non-blocking <code>redis.asyncio</code>. Sync views use standard thread-safe Redis. No event-loop poisoning.
+          </p>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="card-border rounded-2xl p-7 bg-dark-800/50">
+          <div class="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-5">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+          </div>
+          <h3 class="text-xl font-bold text-white mb-2">Cluster & Sentinel Failover</h3>
+          <p class="text-slate-300 text-sm leading-relaxed">
+            Automatic hash-tagging (<code>{user:123}</code>) guarantees multi-rate batches route to the exact same Redis cluster shard, eliminating <code>CROSSSLOT</code> keys errors.
+          </p>
+        </div>
+
+        <!-- Feature 5 -->
+        <div class="card-border rounded-2xl p-7 bg-dark-800/50">
+          <div class="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 mb-5">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+          </div>
+          <h3 class="text-xl font-bold text-white mb-2">Safe In-Memory Outage Fallback</h3>
+          <p class="text-slate-300 text-sm leading-relaxed">
+            If Redis goes down, UniLimit can seamlessly degrade to local process-isolated sliding windows. Your service stays protected against cascading traffic surges.
+          </p>
+        </div>
+
+        <!-- Feature 6 -->
+        <div class="card-border rounded-2xl p-7 bg-dark-800/50">
+          <div class="w-12 h-12 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400 mb-5">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+          </div>
+          <h3 class="text-xl font-bold text-white mb-2">IETF Headers & Telemetry</h3>
+          <p class="text-slate-300 text-sm leading-relaxed">
+            Emits modern standard <code>RateLimit-*</code> headers and classic <code>X-RateLimit-*</code>. Built-in hooks for Prometheus and OpenTelemetry with zero overhead.
+          </p>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Interactive Framework Showcase -->
+  <section id="frameworks" class="py-20 bg-dark-800/40 border-t border-white/5">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-12">
+        <h2 class="text-xs uppercase font-bold tracking-widest text-brand-400 mb-2">Write Once, Protect Everywhere</h2>
+        <p class="text-3xl sm:text-4xl font-extrabold text-white">Intuitive APIs for your favorite framework</p>
+      </div>
+
+      <!-- Framework Tabs -->
+      <div class="flex justify-center flex-wrap gap-2 mb-6">
+        <button onclick="switchTab('fastapi')" id="tab-fastapi" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-semibold bg-brand-600 text-white transition">FastAPI</button>
+        <button onclick="switchTab('django')" id="tab-django" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 text-slate-300 transition">Django</button>
+        <button onclick="switchTab('drf')" id="tab-drf" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 text-slate-300 transition">Django REST Framework</button>
+        <button onclick="switchTab('websockets')" id="tab-websockets" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 text-slate-300 transition">WebSockets</button>
+        <button onclick="switchTab('python')" id="tab-python" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-semibold bg-white/5 hover:bg-white/10 text-slate-300 transition">Plain Python</button>
+      </div>
+
+      <!-- Code Windows -->
+      <div class="card-border rounded-2xl bg-dark-900 overflow-hidden shadow-2xl">
+        <!-- Window title bar -->
+        <div class="px-5 py-3 border-b border-white/10 flex items-center justify-between bg-dark-800/80">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-rose-500/80 inline-block"></span>
+            <span class="w-3 h-3 rounded-full bg-amber-500/80 inline-block"></span>
+            <span class="w-3 h-3 rounded-full bg-emerald-500/80 inline-block"></span>
+            <span id="windowTitle" class="ml-3 text-xs font-mono text-slate-400">main.py (FastAPI)</span>
+          </div>
+          <button onclick="copyCurrentCode()" class="text-xs text-slate-400 hover:text-white flex items-center gap-1.5 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+            <span>Copy Snippet</span>
+          </button>
+        </div>
+
+        <!-- Code Contents -->
+        <div class="p-4 sm:p-6 text-sm overflow-x-auto">
+          
+          <!-- FastAPI Code -->
+          <pre id="code-fastapi" class="!bg-transparent !p-0"><code class="language-python">from fastapi import Depends, FastAPI
+from unilimit import Limiter, Rule
+from unilimit.integrations.fastapi import RateLimit, setup
+
+# 1. Initialize Limiter with global application rules
+limiter = Limiter.from_url(
+    "redis://localhost:6379/0",
+    global_rules=[Rule("site", "100/minute")],
+)
+
+app = FastAPI()
+setup(app, limiter)
+
+# 2. Endpoint-level multi-tier rate limiting
+@app.get("/search", dependencies=[Depends(RateLimit("search", rate="5/second;60/minute"))])
+async def search(q: str = ""):
+    return {"results": f"Searching for {q}"}
+
+# 3. Synchronous endpoints work natively without event-loop overhead
+@app.get("/status")
+def status():
+    return {"status": "operational"}</code></pre>
+
+          <!-- Django Code -->
+          <pre id="code-django" class="!bg-transparent !p-0 hidden"><code class="language-python"># settings.py
+INSTALLED_APPS = [
+    # ...
+    "unilimit.integrations.django",
+]
+MIDDLEWARE = [
+    # ...
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "unilimit.integrations.django.UniLimitMiddleware",  # auto-injects headers
+]
+UNILIMIT = {
+    "URL": "redis://localhost:6379/0",
+    "OPTIONS": {"global_rules": ["1000/hour"]},
+}
+
+# views.py
+from django.http import HttpRequest, JsonResponse
+from unilimit.integrations.django import ratelimit
+
+@ratelimit("login", rate="5/minute;20/hour", block=True)
+def login_view(request: HttpRequest) -> JsonResponse:
+    return JsonResponse({"message": "Authenticated"})</code></pre>
+
+          <!-- DRF Code -->
+          <pre id="code-drf" class="!bg-transparent !p-0 hidden"><code class="language-python">from rest_framework.views import APIView
+from rest_framework.response import Response
+from unilimit.integrations.drf import ScopedRateThrottle
+
+# Unified atomic throttles directly inside Django REST Framework
+class HeavyExportView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "exports"  # Defined in settings.py: UNILIMIT_SCOPES = {"exports": "3/minute"}
+
+    def post(self, request):
+        return Response({"status": "Export queued"})</code></pre>
+
+          <!-- WebSockets Code -->
+          <pre id="code-websockets" class="!bg-transparent !p-0 hidden"><code class="language-python">from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
+from unilimit import Limiter
+from unilimit.integrations.fastapi import WebSocketRateLimit, setup
+
+limiter = Limiter.from_url("redis://localhost:6379/0")
+app = FastAPI()
+setup(app, limiter)
+
+connect_limit = WebSocketRateLimit("ws-handshake", rate="10/minute")
+msg_limit = WebSocketRateLimit("ws-messages", rate="5/second;60/minute")
+
+@app.websocket("/live-feed", dependencies=[Depends(connect_limit)])
+async def feed(ws: WebSocket):
+    await ws.accept()
+    try:
+        while True:
+            data = await ws.receive_text()
+            decision = await msg_limit.consume(ws)
+            if not decision.allowed:
+                await ws.send_json({"error": "slow_down", "retry_after": decision.retry_after})
+                continue
+            await ws.send_text(f"Processed: {data}")
+    except WebSocketDisconnect:
+        pass</code></pre>
+
+          <!-- Plain Python Code -->
+          <pre id="code-python" class="!bg-transparent !p-0 hidden"><code class="language-python">from unilimit import Limiter, Rule
+
+# Pure Python, framework-agnostic limiter
+limiter = Limiter.from_url("redis://localhost:6379/0")
+
+# Atomic multi-tier evaluation
+decision = limiter.consume(
+    "tenant_42", 
+    [Rule("sec", "10/s"), Rule("day", "5000/d")]
+)
+
+if decision.allowed:
+    print(f"Allowed! {decision.remaining} requests remaining")
+else:
+    print(f"Blocked! Retry after {decision.retry_after} seconds")</code></pre>
+
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Performance Benchmarks & Comparison -->
+  <section id="benchmarks" class="py-20 bg-dark-900 border-t border-white/5">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <h2 class="text-xs uppercase font-bold tracking-widest text-brand-400 mb-2">Performance & Architecture</h2>
+        <p class="text-3xl sm:text-4xl font-extrabold text-white">How UniLimit compares to alternatives</p>
+        <p class="text-slate-400 mt-4 text-base">We tested multi-tier rate limiting under real production load. UniLimit evaluates every tier in one single atomic trip.</p>
+      </div>
+
+      <!-- Comparison Table -->
+      <div class="card-border rounded-2xl overflow-hidden shadow-2xl bg-dark-800/60">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm border-collapse">
+            <thead>
+              <tr class="border-b border-white/10 bg-white/5">
+                <th class="p-4 sm:p-5 font-bold text-white">Capability</th>
+                <th class="p-4 sm:p-5 font-bold text-brand-400 bg-brand-500/10 border-x border-brand-500/20">UniLimit</th>
+                <th class="p-4 sm:p-5 font-medium text-slate-300">SlowAPI</th>
+                <th class="p-4 sm:p-5 font-medium text-slate-300">limits</th>
+                <th class="p-4 sm:p-5 font-medium text-slate-300">django-ratelimit</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-white/5 text-slate-300">
+              <tr>
+                <td class="p-4 sm:p-5 font-medium text-white">Multi-Tier Redis Calls</td>
+                <td class="p-4 sm:p-5 text-emerald-400 font-bold bg-brand-500/10 border-x border-brand-500/20">1 Atomic EVALSHA</td>
+                <td class="p-4 sm:p-5 text-slate-400">3–5 roundtrips</td>
+                <td class="p-4 sm:p-5 text-slate-400">Multiple commands</td>
+                <td class="p-4 sm:p-5 text-slate-400">Multiple commands</td>
+              </tr>
+              <tr>
+                <td class="p-4 sm:p-5 font-medium text-white">Atomic Batches (All-or-Nothing)</td>
+                <td class="p-4 sm:p-5 text-emerald-400 font-bold bg-brand-500/10 border-x border-brand-500/20">✓ Yes (Zero leaks)</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ No</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ No</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ No</td>
+              </tr>
+              <tr>
+                <td class="p-4 sm:p-5 font-medium text-white">Async + Sync Native</td>
+                <td class="p-4 sm:p-5 text-emerald-400 font-bold bg-brand-500/10 border-x border-brand-500/20">✓ Native redis.asyncio</td>
+                <td class="p-4 sm:p-5 text-amber-400">Sync wrapper</td>
+                <td class="p-4 sm:p-5 text-amber-400">Sync only in older</td>
+                <td class="p-4 sm:p-5 text-rose-400">Sync only</td>
+              </tr>
+              <tr>
+                <td class="p-4 sm:p-5 font-medium text-white">WebSocket Concurrency & Rates</td>
+                <td class="p-4 sm:p-5 text-emerald-400 font-bold bg-brand-500/10 border-x border-brand-500/20">✓ Built-in First Class</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ No</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ Manual</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ No</td>
+              </tr>
+              <tr>
+                <td class="p-4 sm:p-5 font-medium text-white">Storage Privacy</td>
+                <td class="p-4 sm:p-5 text-emerald-400 font-bold bg-brand-500/10 border-x border-brand-500/20">✓ Keyed Digests (HMAC)</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ Plaintext IPs / IDs</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ Plaintext Strings</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ Plaintext IPs</td>
+              </tr>
+              <tr>
+                <td class="p-4 sm:p-5 font-medium text-white">In-Memory Outage Fallback</td>
+                <td class="p-4 sm:p-5 text-emerald-400 font-bold bg-brand-500/10 border-x border-brand-500/20">✓ Sliding Window Fallback</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ Fails Open / Dies</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ None</td>
+                <td class="p-4 sm:p-5 text-rose-400">✗ None</td>
+              </tr>
+              <tr>
+                <td class="p-4 sm:p-5 font-medium text-white">Standard IETF Headers</td>
+                <td class="p-4 sm:p-5 text-emerald-400 font-bold bg-brand-500/10 border-x border-brand-500/20">✓ RFC Draft + Classic</td>
+                <td class="p-4 sm:p-5 text-amber-400">Classic only</td>
+                <td class="p-4 sm:p-5 text-amber-400">Manual</td>
+                <td class="p-4 sm:p-5 text-rose-400">None</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Interactive Architecture Flow -->
+  <section id="architecture" class="py-20 bg-dark-800/40 border-t border-white/5">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <h2 class="text-xs uppercase font-bold tracking-widest text-brand-400 mb-2">Request Lifecycle</h2>
+        <p class="text-3xl sm:text-4xl font-extrabold text-white">How a request flows through UniLimit</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        
+        <!-- Step 1 -->
+        <div class="card-border rounded-xl p-5 bg-dark-900/60">
+          <div class="text-xs font-mono text-brand-400 font-bold mb-2">STEP 01</div>
+          <h4 class="text-base font-bold text-white mb-2">Request Inbound</h4>
+          <p class="text-xs text-slate-300 leading-relaxed">
+            FastAPI dependency, Django middleware, or pure Python limiter intercepts the incoming request context.
+          </p>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="card-border rounded-xl p-5 bg-dark-900/60">
+          <div class="text-xs font-mono text-purple-400 font-bold mb-2">STEP 02</div>
+          <h4 class="text-base font-bold text-white mb-2">Sans-I/O Policy</h4>
+          <p class="text-xs text-slate-300 leading-relaxed">
+            Identities are cryptographically salted & hashed. Multi-tier rules and cluster hash-tags are generated in memory.
+          </p>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="card-border rounded-xl p-5 bg-dark-900/60">
+          <div class="text-xs font-mono text-emerald-400 font-bold mb-2">STEP 03</div>
+          <h4 class="text-base font-bold text-white mb-2">Atomic Redis Lua</h4>
+          <p class="text-xs text-slate-300 leading-relaxed">
+            A single EVALSHA executes in Redis with server-side microsecond precision. All tiers commit together or reject.
+          </p>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="card-border rounded-xl p-5 bg-dark-900/60">
+          <div class="text-xs font-mono text-amber-400 font-bold mb-2">STEP 04</div>
+          <h4 class="text-base font-bold text-white mb-2">Decision & Headers</h4>
+          <p class="text-xs text-slate-300 leading-relaxed">
+            Standard <code>RateLimit-*</code> headers are injected. If rejected, a 429 response with exact <code>Retry-After</code> is returned.
+          </p>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Quickstart Instructions -->
+  <section id="quickstart" class="py-20 bg-dark-900 border-t border-white/5">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center mb-12">
+        <h2 class="text-xs uppercase font-bold tracking-widest text-brand-400 mb-2">Get Started in 60 Seconds</h2>
+        <p class="text-3xl font-extrabold text-white">Installation & Requirements</p>
+      </div>
+
+      <div class="space-y-6">
+        
+        <div class="card-border rounded-xl p-6 bg-dark-800/40">
+          <h3 class="text-lg font-bold text-white mb-2">1. Choose your installation bundle</h3>
+          <p class="text-sm text-slate-300 mb-4">Install core with optional framework and Redis drivers:</p>
+          <pre class="!bg-dark-900 rounded-lg p-3 text-xs sm:text-sm"><code class="language-bash"># For FastAPI with Redis:
+pip install "unilimit[fastapi,redis]"
+
+# For Django with Redis:
+pip install "unilimit[django,redis]"
+
+# For Core only (zero runtime dependencies, in-memory):
+pip install unilimit</code></pre>
+        </div>
+
+        <div class="card-border rounded-xl p-6 bg-dark-800/40">
+          <h3 class="text-lg font-bold text-white mb-2">2. Supported Algorithms</h3>
+          <p class="text-sm text-slate-300 mb-4">UniLimit ships with mathematically proven, battle-tested algorithms verified by Hypothesis property fuzzing:</p>
+          <ul class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-mono text-slate-300">
+            <li class="p-3 bg-dark-900 rounded-lg border border-white/5">
+              <strong class="text-white block mb-1">Token Bucket</strong>
+              Smooth burst tolerance with steady replenishment.
+            </li>
+            <li class="p-3 bg-dark-900 rounded-lg border border-white/5">
+              <strong class="text-white block mb-1">Sliding Window</strong>
+              Weighted sliding estimation with zero boundary spikes.
+            </li>
+            <li class="p-3 bg-dark-900 rounded-lg border border-white/5">
+              <strong class="text-white block mb-1">Fixed Window</strong>
+              Lean integer counter for high-volume coarse limits.
+            </li>
+          </ul>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="border-t border-white/10 bg-dark-900 py-12 px-4 sm:px-8">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6">
+      
+      <div class="flex items-center gap-3">
+        <img src="assets/dark.svg" alt="UniLimit Logo" class="h-6 w-auto">
+        <span class="text-xs text-slate-400">Released under the MIT License.</span>
+      </div>
+
+      <div class="flex items-center gap-6 text-sm text-slate-400 font-medium">
+        <a href="https://github.com/ArnavBallinCode/unilimit" target="_blank" class="hover:text-white transition">GitHub</a>
+        <a href="https://pypi.org/project/unilimit/" target="_blank" class="hover:text-white transition">PyPI</a>
+        <a href="https://github.com/ArnavBallinCode/unilimit/issues" target="_blank" class="hover:text-white transition">Issues</a>
+        <a href="https://github.com/ArnavBallinCode/unilimit/blob/main/ARCHITECTURAL_DECISIONS.md" target="_blank" class="hover:text-white transition">Architecture</a>
+      </div>
+
+      <div class="text-xs text-slate-500">
+        Created by <a href="https://github.com/ArnavBallinCode" target="_blank" class="text-slate-300 hover:text-white underline">Arnav Angarkar</a>
+      </div>
+
+    </div>
+  </footer>
+
+  <!-- Scripts for Tabs, Copy and Install Toggle -->
+  <script>
+    let currentTool = 'uv';
+
+    function setInstallTool(tool) {
+      currentTool = tool;
+      const cmdEl = document.getElementById('installCmd');
+      if (tool === 'uv') {
+        cmdEl.textContent = 'uv add "unilimit[fastapi,redis]"';
+      } else if (tool === 'pip') {
+        cmdEl.textContent = 'pip install "unilimit[fastapi,redis]"';
+      } else if (tool === 'poetry') {
+        cmdEl.textContent = 'poetry add "unilimit[fastapi,redis]"';
+      }
+    }
+
+    function copyInstallCmd() {
+      const text = document.getElementById('installCmd').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const copyIcon = document.getElementById('copyIcon');
+        const checkIcon = document.getElementById('checkIcon');
+        copyIcon.classList.add('hidden');
+        checkIcon.classList.remove('hidden');
+        setTimeout(() => {
+          copyIcon.classList.remove('hidden');
+          checkIcon.classList.add('hidden');
+        }, 2000);
+      });
+    }
+
+    let activeTab = 'fastapi';
+    const tabFiles = {
+      'fastapi': 'main.py (FastAPI)',
+      'django': 'settings.py & views.py (Django)',
+      'drf': 'views.py (Django REST Framework)',
+      'websockets': 'chat_server.py (WebSockets)',
+      'python': 'script.py (Pure Python)'
+    };
+
+    function switchTab(framework) {
+      activeTab = framework;
+      
+      // Update buttons
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('bg-brand-600', 'text-white');
+        btn.classList.add('bg-white/5', 'text-slate-300');
+      });
+      const activeBtn = document.getElementById(`tab-${framework}`);
+      activeBtn.classList.remove('bg-white/5', 'text-slate-300');
+      activeBtn.classList.add('bg-brand-600', 'text-white');
+
+      // Update window title
+      document.getElementById('windowTitle').textContent = tabFiles[framework];
+
+      // Hide all code blocks, show selected
+      ['fastapi', 'django', 'drf', 'websockets', 'python'].forEach(f => {
+        const el = document.getElementById(`code-${f}`);
+        if (f === framework) {
+          el.classList.remove('hidden');
+        } else {
+          el.classList.add('hidden');
+        }
+      });
+    }
+
+    function copyCurrentCode() {
+      const activeCodeEl = document.getElementById(`code-${activeTab}`).querySelector('code');
+      navigator.clipboard.writeText(activeCodeEl.innerText).then(() => {
+        alert('Code snippet copied to clipboard!');
+      });
+    }
+  </script>
+</body>
+</html>
