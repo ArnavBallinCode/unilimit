@@ -1,1 +1,18 @@
+# Choosing a Python rate limiter
 
+Reviewed 2026-11-01 against the linked upstream documentation and source. These are
+selection notes, not claims that one library wins every workload. Check the version you
+install: upstream implementations and APIs change.
+
+- [SlowAPI](/docs/comparisons/slowapi-vs-unilimit): familiar FastAPI/Starlette decorators backed by limits.
+- [django-ratelimit](/docs/comparisons/django-ratelimit-vs-unilimit): Django cache-based decorators.
+- [limits](/docs/comparisons/limits-vs-unilimit): lower-level strategies with a broader storage selection.
+- [FastAPI-Limiter](/docs/comparisons/fastapi-limiter-vs-unilimit): focused FastAPI dependencies and WebSockets.
+
+UniLimit is worth evaluating when you need consistent framework APIs, explicit identity
+and outage policies, or multiple rules consumed together. Batch atomicity covers memory,
+standalone Redis, and a single Cluster slot. Cross-slot batches may partially consume;
+middleware and endpoint stages are separate batches. Its compatibility adapters cover
+the main SlowAPI and django-ratelimit APIs, reject the options they cannot honour, and
+[document their differences](/docs/migration); [benchmarks](/docs/observability/benchmarks)
+show workloads where `limits` is faster. Choose on measured behavior and integration needs.
